@@ -1,6 +1,12 @@
 #!/bin/bash
 
-INPUT="new_cadets.csv"
+# Check for input file argument
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 <csv_file>"
+  exit 1
+fi
+
+INPUT="$1"
 DOMAIN="test.lan"
 PASSWORD="Password@1"
 
@@ -16,34 +22,34 @@ get_org_unit() {
   esac
 }
 
-# Read CSV and create users
+# Read the CSV and create users
 while IFS=, read -r first last grade
 do
-  # Skip header
+  # Skip the header
   if [[ "$first" == "first_name" ]]; then continue; fi
 
-  # Clean and lowercase names
+  # Sanitize input
   first_clean=$(echo "$first" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
   last_clean=$(echo "$last" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
 
-  # Build base username
+  # Create base username: cadetfLast
   base_username="cadet${first_clean:0:1}${last_clean}"
   username="$base_username"
   email="${username}@${DOMAIN}"
   counter=1
 
-  # Check for existing username and find a unique one
+  # Check if user exists and find next available username
   while gam info user "$email" >/dev/null 2>&1; do
     username="${base_username}${counter}"
     email="${username}@${DOMAIN}"
     ((counter++))
   done
 
-  # Determine org unit
+  # Determine correct OU
   org_unit=$(get_org_unit "$grade")
 
   # Create user
-  echo "Creating user $email in OU $org_unit"
+  echo "Creating user: $email in OU: $org_unit"
   gam create user "$username" firstname "$first" lastname "$last" password "$PASSWORD" org "$org_unit"
 
 done < "$INPUT"
