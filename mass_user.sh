@@ -3,7 +3,7 @@
 set -euo pipefail
 
 INPUT="$1"
-DOMAIN="nomma.net"
+DOMAIN="test.lan"
 PASSWORD="Password@1"
 FAILED_OUTPUT="failed_users.csv"
 
