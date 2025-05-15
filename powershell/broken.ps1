@@ -17,9 +17,9 @@ param(
 )
 
 # Default email settings - Change these to your values
-$defaultEmailTo = "ldecareaux@nomma.net"  # Your recipient email
-$defaultEmailFrom = "scan2@nomma.net"  # Your Gmail address
-$defaultEmailPasswordString = "uzds yjqo nwsx gimo"  # Your Gmail app password
+$defaultEmailTo = ""  # Your recipient email
+$defaultEmailFrom = ""  # Your Gmail address
+$defaultEmailPasswordString = ""  # Your Gmail app password
 
 # Use provided parameters or defaults
 $EmailTo = if ($EmailTo)
