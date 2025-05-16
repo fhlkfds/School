@@ -43,11 +43,11 @@ user_menu() {
     echo "3. Archive User"
     echo "4. Archive Multiple Users (CSV)"
     echo "5. Suspend User"
-    echo "6. Return to Main Menu"
+    echo "6. Moving User to a grade OU (CSV)"
+    echo "7. Return to Main Menu"
     echo "=========================================="
     echo "Enter your choice [1-6]: "
 }
-
 # Function to display device management submenu
 device_menu() {
     clear
@@ -56,11 +56,13 @@ device_menu() {
     echo "=========================================="
     echo "1. Lock Single Mobile Device"
     echo "2. Lock Multiple Mobile Devices (CSV)"
-    echo "3. Wipe Device"
-    echo "4. List All Devices"
-    echo "5. Return to Main Menu"
+    echo "3. Re-enable Single Mobile Device"
+    echo "4. Re-enable Multiple Mobile Devices (CSV)"
+    echo "5. Wipe Device"
+    echo "6. List All Devices"
+    echo "7. Return to Main Menu"
     echo "=========================================="
-    echo "Enter your choice [1-5]: "
+    echo "Enter your choice [1-7]: "
 }
 
 # Function to display information retrieval submenu
@@ -174,7 +176,7 @@ create_user() {
             *) echo "Invalid grade level. Using default /Cadets"; orgunit="/Cadets" ;;
         esac
         
-        # For students, format email as cadetflastname@nomma.net
+        # For students, format email as caMoving User to a grade OU (CSV)detflastname@nomma.net
         firstinitial="${firstname:0:1}"
         firstinitial=$(echo "$firstinitial" | tr '[:upper:]' '[:lower:]')  # convert to lowercase
         lastname_lower=$(echo "$lastname" | tr '[:upper:]' '[:lower:]')   # convert to lowercase
@@ -377,8 +379,17 @@ create_csv_template() {
             echo "jsmith@nomma.net,device_id_123" >> lock_devices_template.csv
             echo "Template saved as lock_devices_template.csv"
             ;;
+        5)  # Grade Movement Template
+            echo "email,grade" > grade_movement_template.csv
+            echo "cadetjdoe@nomma.net,9" >> grade_movement_template.csv
+            echo "cadetasmith@nomma.net,10" >> grade_movement_template.csv
+            echo "Template saved as grade_movement_template.csv"
+            echo "Note: grade should be 8, 9, 10, 11, or 12"
+            echo "  - Users will be moved to /Cadets/[grade]th grade/"
+            ;;
+
             
-        5)  # Return to Main Menu
+        6)  # Return to Main Menu
             return
             ;;
             
@@ -388,6 +399,81 @@ create_csv_template() {
     
     read -p "Press Enter to continue..."
 }
+
+
+
+
+# Function to move users to grade OUs based on their emails
+move_users_to_grade() {
+    clear
+    echo "Move Users to Grade OU (CSV)"
+    echo "-------------------------"
+    echo "CSV file should have headers: email,grade"
+    echo "- email: User's email address"
+    echo "- grade: Grade level (8, 9, 10, 11, or 12)"
+    
+    read -p "Enter CSV file path: " csvfile
+    
+    if [ -f "$csvfile" ]; then
+        echo "Moving users from $csvfile to appropriate grade OUs..."
+        
+        # Create output file for results
+        resultfile="grade_move_results_$(date +%Y%m%d_%H%M%S).csv"
+        echo "email,grade,new_ou,status" > "$resultfile"
+        
+        # Skip header line and process each user
+        tail -n +2 "$csvfile" | while IFS=, read -r email grade || [[ -n "$email" ]]; do
+            # Remove any whitespace
+            email=$(echo "$email" | xargs)
+            grade=$(echo "$grade" | xargs)
+            
+            # Skip if email or grade is empty after trimming
+            if [ -z "$email" ] || [ -z "$grade" ]; then
+                continue
+            fi
+            
+            # Determine the appropriate OU based on grade
+            case $grade in
+                8) ou="/Cadets/8th grade/" ;;
+                9) ou="/Cadets/9th grade/" ;;
+                10) ou="/Cadets/10th grade/" ;;
+                11) ou="/Cadets/11th grade/" ;;
+                12) ou="/Cadets/12th grade/" ;;
+                *) 
+                    echo "Invalid grade level for $email: $grade. Skipping."
+                    echo "$email,$grade,invalid,skipped" >> "$resultfile"
+                    continue
+                    ;;
+            esac
+            
+            echo "Moving $email to $ou..."
+            
+            if gam update user "$email" org "$ou"; then
+                echo "$email,$grade,$ou,success" >> "$resultfile"
+                echo "Successfully moved $email to $ou"
+            else
+                echo "$email,$grade,$ou,failed" >> "$resultfile"
+                echo "Failed to move $email to $ou"
+            fi
+        done
+        
+        echo "User movement complete. Results saved to $resultfile"
+    else
+        echo "File not found!"
+    fi
+    read -p "Press Enter to continue..."
+}
+
+# Update to create_csv_template function to add grade movement template
+# Add this case to the existing create_csv_template function's case statement:
+#        6)  # Grade Movement Template
+#            echo "email,grade" > grade_movement_template.csv
+#            echo "cadetjdoe@nomma.net,9" >> grade_movement_template.csv
+#            echo "cadetasmith@nomma.net,10" >> grade_movement_template.csv
+#            echo "Template saved as grade_movement_template.csv"
+#            echo "Note: grade should be 8, 9, 10, 11, or 12"
+#            echo "  - Users will be moved to /Cadets/[grade]th grade/"
+#            ;;
 # Function to archive a single user
 archive_user() {
     clear
@@ -587,71 +673,43 @@ suspend_user() {
 }
 
 # Function to lock a mobile device
-# Function to lock a device by asset tag
 lock_device() {
     clear
-    echo "Lock Device by Asset Tag"
-    echo "-----------------------"
-    read -p "Enter device asset tag: " assettag
+    echo "Lock Mobile Device"
+    echo "-----------------"
+    read -p "Enter user email: " useremail
     
-    echo "Searching for device with asset tag $assettag..."
+    echo "Retrieving mobile devices for $useremail..."
+    gam print mobile query "user:$useremail" > devices.txt
     
-    # First try to find in Chrome OS devices
-    gam print cros query "asset_id:$assettag" fields deviceId,serialNumber,status,annotatedAssetId > device_result.csv
+    echo "Available devices:"
+    cat devices.txt | awk -F',' '{print NR ") " $1 " - " $2 " - " $3}'
     
-    if [ -s device_result.csv ] && [ $(wc -l < device_result.csv) -gt 1 ]; then
-        echo "Chrome OS device found with asset tag $assettag:"
-        cat device_result.csv
-        
-        # Extract device ID from the result (assuming it's in the first column)
-        deviceid=$(tail -n +2 device_result.csv | cut -d',' -f1)
-        
-        if [ ! -z "$deviceid" ]; then
-            echo "Locking Chrome OS device with ID $deviceid..."
-            gam update cros $deviceid action disable
-            echo "Device has been locked"
-        else
-            echo "Failed to extract device ID from the result"
-        fi
+    read -p "Enter device number to lock: " devicenum
+    
+    deviceid=$(sed -n "${devicenum}p" devices.txt | cut -d',' -f1)
+    
+    if [ ! -z "$deviceid" ]; then
+        echo "Locking device $deviceid..."
+        gam update mobile "$deviceid" action accountlock
+        echo "Device has been locked"
     else
-        echo "No Chrome OS device found with asset tag $assettag"
-        echo "Searching for mobile device with asset tag $assettag..."
-        
-        # Try to find in mobile devices
-        gam print mobile query "asset_id:$assettag" > mobile_result.csv
-        
-        if [ -s mobile_result.csv ] && [ $(wc -l < mobile_result.csv) -gt 1 ]; then
-            echo "Mobile device found with asset tag $assettag:"
-            cat mobile_result.csv
-            
-            # Extract device ID from the result (assuming it's in the first column)
-            deviceid=$(tail -n +2 mobile_result.csv | cut -d',' -f1)
-            
-            if [ ! -z "$deviceid" ]; then
-                echo "Locking mobile device with ID $deviceid..."
-                gam update mobile "$deviceid" action accountlock
-                echo "Device has been locked"
-            else
-                echo "Failed to extract device ID from the result"
-            fi
-        else
-            echo "No device found with asset tag $assettag"
-        fi
+        echo "Invalid device selection"
     fi
     
-    # Clean up temporary files
-    rm -f device_result.csv mobile_result.csv
-    
+    rm devices.txt
     read -p "Press Enter to continue..."
 }
 
-# Function to lock multiple devices using asset tags from CSV
+# Function to lock multiple mobile devices using CSV
 lock_multi_device() {
     clear
-    echo "Lock Multiple Devices by Asset Tags (CSV)"
-    echo "---------------------------------------"
-    echo "CSV file should have headers: asset_tag"
-    echo "Each row should contain a device asset tag"
+    echo "Lock Multiple Mobile Devices (CSV)"
+    echo "-------------------------------"
+    echo "CSV file should have headers: email,deviceid"
+    echo "- email: User's email (if deviceid not provided)"
+    echo "- deviceid: Optional - specific device ID to lock"
+    echo "If deviceid is blank, all devices for that user will be locked"
     
     read -p "Enter CSV file path: " csvfile
     
@@ -660,78 +718,40 @@ lock_multi_device() {
         
         # Create output file for results
         resultfile="device_lock_results_$(date +%Y%m%d_%H%M%S).csv"
-        echo "asset_tag,device_type,deviceid,status" > "$resultfile"
+        echo "email,deviceid,status" > "$resultfile"
         
         # Skip header line and process each entry
-        tail -n +2 "$csvfile" | while IFS=, read -r assettag || [[ -n "$assettag" ]]; do
+        tail -n +2 "$csvfile" | while IFS=, read -r email deviceid || [[ -n "$email" ]]; do
             # Remove any whitespace
-            assettag=$(echo "$assettag" | xargs)
+            email=$(echo "$email" | xargs)
+            deviceid=$(echo "$deviceid" | xargs)
             
-            # Skip if asset tag is empty after trimming
-            if [ -z "$assettag" ]; then
-                continue
-            fi
-            
-            echo "Processing asset tag: $assettag..."
-            
-            # First try to find in Chrome OS devices
-            gam print cros query "asset_id:$assettag" fields deviceId,serialNumber,status,annotatedAssetId > device_result.csv
-            
-            if [ -s device_result.csv ] && [ $(wc -l < device_result.csv) -gt 1 ]; then
-                echo "Chrome OS device found with asset tag $assettag"
+            if [ -z "$deviceid" ]; then
+                echo "Processing all devices for $email..."
                 
-                # Extract device ID from the result (assuming it's in the first column)
-                deviceid=$(tail -n +2 device_result.csv | cut -d',' -f1)
-                
-                if [ ! -z "$deviceid" ]; then
-                    echo "Locking Chrome OS device with ID $deviceid..."
-                    
-                    if gam update cros $deviceid action disable; then
-                        echo "$assettag,chromeos,$deviceid,success" >> "$resultfile"
-                        echo "Chrome OS device locked successfully"
-                    else
-                        echo "$assettag,chromeos,$deviceid,failed" >> "$resultfile"
-                        echo "Failed to lock Chrome OS device"
-                    fi
-                else
-                    echo "$assettag,chromeos,unknown,failed-no-id" >> "$resultfile"
-                    echo "Failed to extract device ID from the result"
-                fi
-            else
-                echo "No Chrome OS device found with asset tag $assettag"
-                echo "Searching for mobile device with asset tag $assettag..."
-                
-                # Try to find in mobile devices
-                gam print mobile query "asset_id:$assettag" > mobile_result.csv
-                
-                if [ -s mobile_result.csv ] && [ $(wc -l < mobile_result.csv) -gt 1 ]; then
-                    echo "Mobile device found with asset tag $assettag"
-                    
-                    # Extract device ID from the result (assuming it's in the first column)
-                    deviceid=$(tail -n +2 mobile_result.csv | cut -d',' -f1)
-                    
+                # Get all devices for this user and lock them
+                gam print mobile query "user:$email" | tail -n +2 | while IFS=, read -r deviceid rest; do
                     if [ ! -z "$deviceid" ]; then
-                        echo "Locking mobile device with ID $deviceid..."
+                        echo "Locking device $deviceid for $email..."
                         
                         if gam update mobile "$deviceid" action accountlock; then
-                            echo "$assettag,mobile,$deviceid,success" >> "$resultfile"
-                            echo "Mobile device locked successfully"
+                            echo "$email,$deviceid,success" >> "$resultfile"
                         else
-                            echo "$assettag,mobile,$deviceid,failed" >> "$resultfile"
-                            echo "Failed to lock mobile device"
+                            echo "$email,$deviceid,failed" >> "$resultfile"
                         fi
-                    else
-                        echo "$assettag,mobile,unknown,failed-no-id" >> "$resultfile"
-                        echo "Failed to extract device ID from the result"
                     fi
+                done
+            else
+                echo "Locking specific device $deviceid..."
+                
+                if gam update mobile "$deviceid" action accountlock; then
+                    echo "$email,$deviceid,success" >> "$resultfile"
+                    echo "Device $deviceid locked successfully"
                 else
-                    echo "$assettag,unknown,unknown,not-found" >> "$resultfile"
-                    echo "No device found with asset tag $assettag"
+                    echo "$email,$deviceid,failed" >> "$resultfile"
+                    echo "Failed to lock device $deviceid"
                 fi
             fi
-            
-            # Clean up temporary files
-            rm -f device_result.csv mobile_result.csv
         done
         
         echo "Device locking complete. Results saved to $resultfile"
@@ -741,77 +761,151 @@ lock_multi_device() {
     read -p "Press Enter to continue..."
 }
 
-# Function to wipe a device by asset tag
-wipe_device() {
+# Function to re-enable a single Chrome OS device
+enable_device() {
     clear
-    echo "Wipe Device by Asset Tag"
-    echo "----------------------"
-    read -p "Enter device asset tag: " assettag
+    echo "Re-enable Chrome OS Device"
+    echo "-------------------------"
+    read -p "Enter asset tag: " assettag
     
-    echo "Searching for device with asset tag $assettag..."
+    echo "Retrieving Chrome OS device with asset ID $assettag..."
+    # Find Chrome OS devices with the specified asset ID
+    gam print cros query "asset_id:$assettag" > devices.txt
     
-    # First try to find in Chrome OS devices
-    gam print cros query "asset_id:$assettag" fields deviceId,serialNumber,status,annotatedAssetId > device_result.csv
-    
-    if [ -s device_result.csv ] && [ $(wc -l < device_result.csv) -gt 1 ]; then
-        echo "Chrome OS device found with asset tag $assettag:"
-        cat device_result.csv
+    if [ -s devices.txt ]; then
+        echo "Available devices:"
+        cat devices.txt | awk -F',' '{print NR ") " $1 " - " $2 " - " $5}'
         
-        # Extract device ID from the result
-        deviceid=$(tail -n +2 device_result.csv | cut -d',' -f1)
+        read -p "Enter device number to re-enable: " devicenum
+        
+        deviceid=$(sed -n "${devicenum}p" devices.txt | cut -d',' -f1)
         
         if [ ! -z "$deviceid" ]; then
-            echo "WARNING: This will wipe the Chrome OS device with ID $deviceid!"
-            read -p "Are you absolutely sure? (type 'WIPE' to confirm): " confirm
-            
-            if [ "$confirm" = "WIPE" ]; then
-                echo "Wiping Chrome OS device..."
-                gam update cros $deviceid action wipe
-                echo "Wipe command has been sent to the device"
-            else
-                echo "Wipe operation cancelled"
-            fi
+            echo "Re-enabling Chrome OS device $deviceid..."
+            gam update cros "$deviceid" action reenable
+            echo "Device has been re-enabled"
         else
-            echo "Failed to extract device ID from the result"
+            echo "Invalid device selection"
         fi
     else
-        echo "No Chrome OS device found with asset tag $assettag"
-        echo "Searching for mobile device with asset tag $assettag..."
-        
-        # Try to find in mobile devices
-        gam print mobile query "asset_id:$assettag" > mobile_result.csv
-        
-        if [ -s mobile_result.csv ] && [ $(wc -l < mobile_result.csv) -gt 1 ]; then
-            echo "Mobile device found with asset tag $assettag:"
-            cat mobile_result.csv
-            
-            # Extract device ID from the result
-            deviceid=$(tail -n +2 mobile_result.csv | cut -d',' -f1)
-            
-            if [ ! -z "$deviceid" ]; then
-                echo "WARNING: This will erase all data on the mobile device with ID $deviceid!"
-                read -p "Are you absolutely sure? (type 'WIPE' to confirm): " confirm
-                
-                if [ "$confirm" = "WIPE" ]; then
-                    echo "Wiping mobile device..."
-                    gam update mobile "$deviceid" action wipe
-                    echo "Wipe command has been sent to the device"
-                else
-                    echo "Wipe operation cancelled"
-                fi
-            else
-                echo "Failed to extract device ID from the result"
-            fi
-        else
-            echo "No device found with asset tag $assettag"
-        fi
+        echo "No Chrome OS devices found with asset ID $assettag"
     fi
     
-    # Clean up temporary files
-    rm -f device_result.csv mobile_result.csv
-    
+    rm devices.txt 2>/dev/null
     read -p "Press Enter to continue..."
 }
+
+# Function to re-enable multiple Chrome OS devices using CSV
+enable_multi_device() {
+    clear
+    echo "Re-enable Multiple Chrome OS Devices (CSV)"
+    echo "----------------------------------------"
+    echo "CSV file should have headers: assettag,deviceid"
+    echo "- assettag: Device's asset ID (if deviceid not provided)"
+    echo "- deviceid: Optional - specific device ID to re-enable"
+    echo "If deviceid is blank, devices with that asset ID will be found and re-enabled"
+    
+    read -p "Enter CSV file path: " csvfile
+    
+    if [ -f "$csvfile" ]; then
+        echo "Re-enabling Chrome OS devices from $csvfile..."
+        
+        # Create output file for results
+        resultfile="device_enable_results_$(date +%Y%m%d_%H%M%S).csv"
+        echo "assettag,deviceid,status" > "$resultfile"
+        
+        # Skip header line and process each entry
+        tail -n +2 "$csvfile" | while IFS=, read -r assettag deviceid || [[ -n "$assettag" ]]; do
+            # Remove any whitespace
+            assettag=$(echo "$assettag" | xargs)
+            deviceid=$(echo "$deviceid" | xargs)
+            
+            if [ -z "$deviceid" ]; then
+                echo "Finding Chrome OS devices with asset ID $assettag..."
+                
+                # Find Chrome OS devices with matching asset ID
+                gam print cros query "asset_id:$assettag" > matching_devices.txt
+                
+                if [ -s matching_devices.txt ]; then
+                    # Process each matching device
+                    tail -n +2 matching_devices.txt | while IFS=, read -r deviceid rest; do
+                        if [ ! -z "$deviceid" ]; then
+                            echo "Re-enabling Chrome OS device $deviceid with asset ID $assettag..."
+                            
+                            if gam update cros "$deviceid" action reenable; then
+                                echo "$assettag,$deviceid,success" >> "$resultfile"
+                            else
+                                echo "$assettag,$deviceid,failed" >> "$resultfile"
+                            fi
+                        fi
+                    done
+                else
+                    echo "No Chrome OS devices found with asset ID $assettag"
+                    echo "$assettag,,not_found" >> "$resultfile"
+                fi
+                
+                rm matching_devices.txt 2>/dev/null
+            else
+                echo "Re-enabling specific Chrome OS device $deviceid..."
+                
+                if gam update cros "$deviceid" action reenable; then
+                    echo "$assettag,$deviceid,success" >> "$resultfile"
+                    echo "Chrome OS device $deviceid re-enabled successfully"
+                else
+                    echo "$assettag,$deviceid,failed" >> "$resultfile"
+                    echo "Failed to re-enable Chrome OS device $deviceid"
+                fi
+            fi
+        done
+        
+        echo "Chrome OS device re-enabling complete. Results saved to $resultfile"
+    else
+        echo "File not found!"
+    fi
+    read -p "Press Enter to continue..."
+}
+
+
+
+
+
+
+# Function to wipe a device
+wipe_device() {
+    clear
+    echo "Wipe Device"
+    echo "----------"
+    read -p "Enter user email: " useremail
+    
+    echo "Retrieving mobile devices for $useremail..."
+    gam print mobile query "user:$useremail" > devices.txt
+    
+    echo "Available devices:"
+    cat devices.txt | awk -F',' '{print NR ") " $1 " - " $2 " - " $3}'
+    
+    read -p "Enter device number to wipe: " devicenum
+    
+    deviceid=$(sed -n "${devicenum}p" devices.txt | cut -d',' -f1)
+    
+    if [ ! -z "$deviceid" ]; then
+        echo "WARNING: This will erase all data on the device!"
+        read -p "Are you absolutely sure? (type 'WIPE' to confirm): " confirm
+        
+        if [ "$confirm" = "WIPE" ]; then
+            echo "Wiping device $deviceid..."
+            gam update mobile "$deviceid" action wipe
+            echo "Wipe command has been sent to the device"
+        else
+            echo "Wipe operation cancelled"
+        fi
+    else
+        echo "Invalid device selection"
+    fi
+    
+    rm devices.txt
+    read -p "Press Enter to continue..."
+}
+
 # Function to list all devices
 list_devices() {
     clear
@@ -1022,12 +1116,12 @@ while true; do
                     3) archive_user ;;
                     4) archive_multi_user ;;
                     5) suspend_user ;;
-                    6) break ;;
+                    6) move_users_to_grade ;;
+                    7) break ;;
                     *) echo "Invalid option. Press Enter to continue..."; read ;;
                 esac
             done
             ;;
-            
         3)  # Device Management
             while true; do
                 device_menu
@@ -1035,13 +1129,15 @@ while true; do
                 case $subchoice in
                     1) lock_device ;;
                     2) lock_multi_device ;;
-                    3) wipe_device ;;
-                    4) list_devices ;;
-                    5) break ;;
+                    3) enable_device ;;
+                    4) enable_multi_device ;;
+                    5) wipe_device ;;
+                    6) list_devices ;;
+                    7) break ;;
                     *) echo "Invalid option. Press Enter to continue..."; read ;;
                 esac
             done
-            ;;
+            ;; 
             
         4)  # Information Retrieval
             while true; do

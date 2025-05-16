@@ -232,7 +232,7 @@ function New-SingleUser
         }
         
         Write-Host "Creating cadet user $email in OU: $orgUnit..." -ForegroundColor Yellow
-        & gam create user "$email" firstname "$firstName" lastname "$lastName" password "Password@1" org "$orgUnit"
+        & gam create user "$email" firstname "$firstName" lastname "$lastName" password "Password@1" org "$orgUnit" changepassword on
     } else
     {
         # Staff account - first initial + last name
@@ -372,7 +372,7 @@ function New-MultipleUsers
                 }
                 
                 Write-Host "Creating cadet user $email in $gradeOU..." -ForegroundColor Yellow
-                & gam create user "$email" firstname "$($user.firstname)" lastname "$($user.lastname)" password "Password@1" org "$gradeOU"
+                & gam create user "$email" firstname "$($user.firstname)" lastname "$($user.lastname)" password "Password@1" org "$gradeOU" changepassword on
             } else
             {
                 # Staff account - first initial + last name
@@ -411,7 +411,7 @@ function New-MultipleUsers
                 }
                 
                 Write-Host "Creating staff user $email in $positionOU..." -ForegroundColor Yellow
-                & gam create user "$email" firstname "$($user.firstname)" lastname "$($user.lastname)" password "Password@1" org "$positionOU"
+                & gam create user "$email" firstname "$($user.firstname)" lastname "$($user.lastname)" password "Password@1" org "$positionOU" changepassword on
             }
             
             Write-Host "User creation successful for $email" -ForegroundColor Green

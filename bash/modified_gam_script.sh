@@ -1,4 +1,60 @@
-#!/bin/bash
+# Function to re-enable a device by asset tag
+enable_device() {
+    clear
+    echo "Re-enable Device by Asset Tag"
+    echo "----------------------------"
+    read -p "Enter device asset tag: " assettag
+    
+    echo "Searching for device with asset tag $assettag..."
+    
+    # First try to find in Chrome OS devices
+    gam print cros query "asset_id:$assettag" fields deviceId,serialNumber,status,annotatedAssetId > device_result.csv
+    
+    if [ -s device_result.csv ] && [ $(wc -l < device_result.csv) -gt 1 ]; then
+        echo "Chrome OS device found with asset tag $assettag:"
+        cat device_result.csv
+        
+        # Extract device ID from the result
+        deviceid=$(tail -n +2 device_result.csv | cut -d',' -f1)
+        
+        if [ ! -z "$deviceid" ]; then
+            echo "Re-enabling Chrome OS device with ID $deviceid..."
+            gam update cros $deviceid action reenable
+            echo "Device has been re-enabled"
+        else
+            echo "Failed to extract device ID from the result"
+        fi
+    else
+        echo "No Chrome OS device found with asset tag $assettag"
+        echo "Searching for mobile device with asset tag $assettag..."
+        
+        # Try to find in mobile devices
+        gam print mobile query "asset_id:$assettag" > mobile_result.csv
+        
+        if [ -s mobile_result.csv ] && [ $(wc -l < mobile_result.csv) -gt 1 ]; then
+            echo "Mobile device found with asset tag $assettag:"
+            cat mobile_result.csv
+            
+            # Extract device ID from the result
+            deviceid=$(tail -n +2 mobile_result.csv | cut -d',' -f1)
+            
+            if [ ! -z "$deviceid" ]; then
+                echo "Re-enabling mobile device with ID $deviceid..."
+                gam update mobile "$deviceid" action approve
+                echo "Device has been re-enabled"
+            else
+                echo "Failed to extract device ID from the result"
+            fi
+        else
+            echo "No device found with asset tag $assettag"
+        fi
+    fi
+    
+    # Clean up temporary files
+    rm -f device_result.csv mobile_result.csv
+    
+    read -p "Press Enter to continue..."
+}#!/bin/bash
 
 # Google Workspace Admin Toolkit using GAM
 # Created: May 14, 2025
@@ -60,10 +116,11 @@ device_menu() {
     echo "2. Lock Multiple Devices by Asset Tags (CSV)"
     echo "3. Wipe Device by Asset Tag"
     echo "4. Re-enable Device by Asset Tag"
-    echo "5. List All Devices"
-    echo "6. Return to Main Menu"
+    echo "5. Re-enable Multiple Devices by Asset Tags (CSV)"
+    echo "6. List All Devices"
+    echo "7. Return to Main Menu"
     echo "=========================================="
-    echo "Enter your choice [1-6]: "
+    echo "Enter your choice [1-7]: "
 }
 
 # Function to display information retrieval submenu
@@ -824,62 +881,202 @@ list_devices() {
     read -p "Press Enter to continue..."
 }
 
-# Function to re-enable a device by asset tag
-enable_device() {
+# Function to check license information
+check_license() {
     clear
-    echo "Re-enable Device by Asset Tag"
-    echo "----------------------------"
-    read -p "Enter device asset tag: " assettag
+    echo "Check License Information"
+    echo "-----------------------"
+    read -p "Enter user email (leave blank for all): " useremail
     
-    echo "Searching for device with asset tag $assettag..."
-    
-    # First try to find in Chrome OS devices
-    gam print cros query "asset_id:$assettag" fields deviceId,serialNumber,status,annotatedAssetId > device_result.csv
-    
-    if [ -s device_result.csv ] && [ $(wc -l < device_result.csv) -gt 1 ]; then
-        echo "Chrome OS device found with asset tag $assettag:"
-        cat device_result.csv
-        
-        # Extract device ID from the result
-        deviceid=$(tail -n +2 device_result.csv | cut -d',' -f1)
-        
-        if [ ! -z "$deviceid" ]; then
-            echo "Re-enabling Chrome OS device with ID $deviceid..."
-            gam update cros $deviceid action reenable
-            echo "Device has been re-enabled"
-        else
-            echo "Failed to extract device ID from the result"
-        fi
+    if [ -z "$useremail" ]; then
+        echo "Retrieving license information for all users..."
+        gam print licenses > license_info.csv
+        echo "License information saved to license_info.csv"
     else
-        echo "No Chrome OS device found with asset tag $assettag"
-        echo "Searching for mobile device with asset tag $assettag..."
-        
-        # Try to find in mobile devices
-        gam print mobile query "asset_id:$assettag" > mobile_result.csv
-        
-        if [ -s mobile_result.csv ] && [ $(wc -l < mobile_result.csv) -gt 1 ]; then
-            echo "Mobile device found with asset tag $assettag:"
-            cat mobile_result.csv
-            
-            # Extract device ID from the result
-            deviceid=$(tail -n +2 mobile_result.csv | cut -d',' -f1)
-            
-            if [ ! -z "$deviceid" ]; then
-                echo "Re-enabling mobile device with ID $deviceid..."
-                gam update mobile "$deviceid" action approve
-                echo "Device has been re-enabled"
-            else
-                echo "Failed to extract device ID from the result"
-            fi
-        else
-            echo "No device found with asset tag $assettag"
-        fi
+        echo "Retrieving license information for $useremail..."
+        gam user "$useremail" show licenses
     fi
-    
-    # Clean up temporary files
-    rm -f device_result.csv mobile_result.csv
     
     read -p "Press Enter to continue..."
 }
 
+# Main program loop
+while true; do
+    clear
+    show_menu
+    read -r choice
+    
+    case $choice in
+        1)  # Password Management
+            while true; do
+                password_menu
+                read -r subchoice
+                case $subchoice in
+                    1) reset_password ;;
+                    2) mass_reset_password ;;
+                    3) break ;;
+                    *) echo "Invalid option. Press Enter to continue..."; read ;;
+                esac
+            done
+            ;;
+            
+        2)  # User Management
+            while true; do
+                user_menu
+                read -r subchoice
+                case $subchoice in
+                    1) create_user ;;
+                    2) create_multi_user ;;
+                    3) archive_user ;;
+                    4) archive_multi_user ;;
+                    5) suspend_user ;;
+                    6) break ;;
+                    *) echo "Invalid option. Press Enter to continue..."; read ;;
+                esac
+            done
+            ;;
+            
+        3)  # Device Management
+            while true; do
+                device_menu
+                read -r subchoice
+                case $subchoice in
+                    1) lock_device ;;
+                    2) lock_multi_device ;;
+                    3) wipe_device ;;
+                    4) enable_device ;;
+                    5) enable_multi_device ;;
+                    6) list_devices ;;
+                    7) break ;;
+                    *) echo "Invalid option. Press Enter to continue..."; read ;;
+                esac
+            done
+            ;;
+            
+        4)  # Information Retrieval
+            while true; do
+                info_menu
+                read -r subchoice
+                case $subchoice in
+                    1) get_device_info ;;
+                    2) get_user_info ;;
+                    3) list_all_users ;;
+                    4) check_license ;;
+                    5) break ;;
+                    *) echo "Invalid option. Press Enter to continue..."; read ;;
+                esac
+            done
+            ;;
+            
+        5)  # Create CSV Templates
+            create_csv_template
+            ;;
+            
+        6)  # Exit
+            echo "Exiting the Google Workspace Admin Toolkit. Goodbye!"
+            exit 0
+            ;;
+            
+        *)  # Invalid option
+            echo "Invalid option. Press Enter to continue..."
+            read
+            ;;
+    esac
+done
+
+# Function to re-enable multiple devices using asset tags from CSV
+enable_multi_device() {
+    clear
+    echo "Re-enable Multiple Devices by Asset Tags (CSV)"
+    echo "-------------------------------------------"
+    echo "CSV file should have headers: asset_tag"
+    echo "Each row should contain a device asset tag"
+    
+    read -p "Enter CSV file path: " csvfile
+    
+    if [ -f "$csvfile" ]; then
+        echo "Re-enabling devices from $csvfile..."
+        
+        # Create output file for results
+        resultfile="device_enable_results_$(date +%Y%m%d_%H%M%S).csv"
+        echo "asset_tag,device_type,deviceid,status" > "$resultfile"
+        
+        # Skip header line and process each entry
+        tail -n +2 "$csvfile" | while IFS=, read -r assettag || [[ -n "$assettag" ]]; do
+            # Remove any whitespace
+            assettag=$(echo "$assettag" | xargs)
+            
+            # Skip if asset tag is empty after trimming
+            if [ -z "$assettag" ]; then
+                continue
+            fi
+            
+            echo "Processing asset tag: $assettag..."
+            
+            # First try to find in Chrome OS devices
+            gam print cros query "asset_id:$assettag" fields deviceId,serialNumber,status,annotatedAssetId > device_result.csv
+            
+            if [ -s device_result.csv ] && [ $(wc -l < device_result.csv) -gt 1 ]; then
+                echo "Chrome OS device found with asset tag $assettag"
+                
+                # Extract device ID from the result (assuming it's in the first column)
+                deviceid=$(tail -n +2 device_result.csv | cut -d',' -f1)
+                
+                if [ ! -z "$deviceid" ]; then
+                    echo "Re-enabling Chrome OS device with ID $deviceid..."
+                    
+                    if gam update cros $deviceid action reenable; then
+                        echo "$assettag,chromeos,$deviceid,success" >> "$resultfile"
+                        echo "Chrome OS device re-enabled successfully"
+                    else
+                        echo "$assettag,chromeos,$deviceid,failed" >> "$resultfile"
+                        echo "Failed to re-enable Chrome OS device"
+                    fi
+                else
+                    echo "$assettag,chromeos,unknown,failed-no-id" >> "$resultfile"
+                    echo "Failed to extract device ID from the result"
+                fi
+            else
+                echo "No Chrome OS device found with asset tag $assettag"
+                echo "Searching for mobile device with asset tag $assettag..."
+                
+                # Try to find in mobile devices
+                gam print mobile query "asset_id:$assettag" > mobile_result.csv
+                
+                if [ -s mobile_result.csv ] && [ $(wc -l < mobile_result.csv) -gt 1 ]; then
+                    echo "Mobile device found with asset tag $assettag"
+                    
+                    # Extract device ID from the result (assuming it's in the first column)
+                    deviceid=$(tail -n +2 mobile_result.csv | cut -d',' -f1)
+                    
+                    if [ ! -z "$deviceid" ]; then
+                        echo "Re-enabling mobile device with ID $deviceid..."
+                        
+                        if gam update mobile "$deviceid" action approve; then
+                            echo "$assettag,mobile,$deviceid,success" >> "$resultfile"
+                            echo "Mobile device re-enabled successfully"
+                        else
+                            echo "$assettag,mobile,$deviceid,failed" >> "$resultfile"
+                            echo "Failed to re-enable mobile device"
+                        fi
+                    else
+                        echo "$assettag,mobile,unknown,failed-no-id" >> "$resultfile"
+                        echo "Failed to extract device ID from the result"
+                    fi
+                else
+                    echo "$assettag,unknown,unknown,not-found" >> "$resultfile"
+                    echo "No device found with asset tag $assettag"
+                fi
+            fi
+            
+            # Clean up temporary files
+            rm -f device_result.csv mobile_result.csv
+        done
+        
+        echo "Device re-enabling complete. Results saved to $resultfile"
+    else
+        echo "File not found!"
+    fi
+    read -p "Press Enter to continue..."
+}
 

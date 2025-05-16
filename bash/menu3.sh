@@ -100,13 +100,12 @@ reset_password() {
     read -p "Press Enter to continue..."
 }
 
-# Function to perform mass password reset using CSV
 mass_reset_password() {
     clear
     echo "Mass Password Reset (CSV)"
     echo "------------------------"
-    echo "CSV file should have headers: email,password"
-    echo "Leave password column blank for random passwords"
+    echo "CSV file should have a single column with user emails"
+    echo "All passwords will be reset to: Password@1"
     
     read -p "Enter CSV file path: " csvfile
     
@@ -117,28 +116,30 @@ mass_reset_password() {
         resultfile="password_reset_results_$(date +%Y%m%d_%H%M%S).csv"
         echo "email,new_password,status" > "$resultfile"
         
-        # Skip header line and process each user
-        tail -n +2 "$csvfile" | while IFS=, read -r email password || [[ -n "$email" ]]; do
+        # Set default password
+        default_password="Password@1"
+        
+        # Process each line in the CSV file
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            # Skip empty lines and possible header
+            if [[ -z "$line" || "$line" == "email" ]]; then
+                continue
+            fi
+            
             # Remove any whitespace
-            email=$(echo "$email" | xargs)
-            password=$(echo "$password" | xargs)
+            email=$(echo "$line" | xargs)
             
             echo "Processing $email..."
             
-            # Generate random password if not provided
-            if [ -z "$password" ]; then
-                password=$(openssl rand -base64 12)
-            fi
-            
-            # Reset the password
-            if gam update user "$email" password "$password"; then
-                echo "$email,$password,success" >> "$resultfile"
+            # Reset the password to Password@1
+            if gam update user "$email" password "$default_password"; then
+                echo "$email,$default_password,success" >> "$resultfile"
                 echo "Password reset successful for $email"
             else
-                echo "$email,$password,failed" >> "$resultfile"
+                echo "$email,$default_password,failed" >> "$resultfile"
                 echo "Password reset failed for $email"
             fi
-        done
+        done < "$csvfile"
         
         echo "Password reset complete. Results saved to $resultfile"
     else
@@ -146,89 +147,183 @@ mass_reset_password() {
     fi
     read -p "Press Enter to continue..."
 }
-
-# Function to create a single user
+# Function to create a single user with grade/job title-based OU assignment
 create_user() {
     clear
     echo "Create Single User"
     echo "-----------------"
     read -p "Enter first name: " firstname
     read -p "Enter last name: " lastname
-    read -p "Enter username (before @domain.com): " username
-    read -p "Enter org unit path (leave blank for root): " orgunit
-    read -p "Enter password (leave blank for random): " password
     
-    domain=$(gam info domain | grep "Primary Domain:" | cut -d ":" -f2 | xargs)
-    email="${username}@${domain}"
+    # Ask if user is a student or staff
+    echo "Is this user a student or staff?"
+    echo "1. Student"
+    echo "2. Staff/Adult"
+    read -p "Enter choice (1 or 2): " usertype
     
-    echo "Creating user $email..."
+    # Initialize orgunit and email format
+    orgunit=""
     
-    if [ -z "$password" ]; then
-        # Random password
-        password=$(openssl rand -base64 12)
-        echo "Generated random password: $password"
+    if [ "$usertype" = "1" ]; then
+        # Student - ask for grade level
+        echo "Select student grade level:"
+        echo "8. Grade 8"
+        echo "9. Grade 9"
+        echo "10. Grade 10"
+        echo "11. Grade 11"
+        echo "12. Grade 12"
+        read -p "Enter grade level (8-12): " grade
+        
+        case $grade in
+            8) orgunit="/Cadets/8th grade/" ;;
+            9) orgunit="/Cadets/9th grade/" ;;
+            10) orgunit="/Cadets/10th grade/" ;;
+            11) orgunit="/Cadets/11th grade/" ;;
+            12) orgunit="/Cadets/12th grade/" ;;
+            *) echo "Invalid grade level. Using default /Cadets"; orgunit="/Cadets" ;;
+        esac
+        
+        # For students, format email as cadetflastname@nomma.net
+        firstinitial="${firstname:0:1}"
+        firstinitial=$(echo "$firstinitial" | tr '[:upper:]' '[:lower:]')  # convert to lowercase
+        lastname_lower=$(echo "$lastname" | tr '[:upper:]' '[:lower:]')   # convert to lowercase
+        username="cadet${firstinitial}${lastname_lower}"
+        domain="@nomma.net"
+    elif [ "$usertype" = "2" ]; then
+        # Staff/Adult - ask for job title
+        echo "Select staff job title:"
+        echo "1. Teacher"
+        echo "2. IT"
+        echo "3. Staff (General)"
+        echo "4. Security"
+        echo "5. Counselor"
+        echo "6. School Admin"
+        read -p "Enter choice (1-6): " jobtitle
+        
+        case $jobtitle in
+            1) orgunit="/Faculty & Staff/Teachers" ;;
+            2) orgunit="/Faculty & Staff/IT" ;;
+            3) orgunit="/Faculty & Staff/General" ;;
+            4) orgunit="/Faculty & Staff/Security" ;;
+            5) orgunit="/Faculty & Staff/Counselors" ;;
+            6) orgunit="/Faculty & Staff/SchoolAdmins" ;;
+            *) echo "Invalid selection. Using default /Faculty & Staff"; orgunit="/Faculty & Staff" ;;
+        esac
+        
+        # For staff, ask for username
+        read -p "Enter username (before @nomma.net): " username
+        domain="@nomma.net"
+    else
+        echo "Invalid selection. Using root organizational unit."
+        read -p "Enter username (before @nomma.net): " username
+        domain="@nomma.net"
     fi
     
-    cmd="gam create user $email firstname \"$firstname\" lastname \"$lastname\" password \"$password\""
+    email="${username}${domain}"
     
-    if [ ! -z "$orgunit" ]; then
-        cmd="$cmd org \"$orgunit\""
-    fi
+    # Set default password
+    password="Password@1"
+    
+    echo "Creating user $email in organization unit $orgunit..."
+    
+    cmd="gam create user $email firstname \"$firstname\" lastname \"$lastname\" password \"$password\" org \"$orgunit\""
     
     eval $cmd
     
-    echo "User $email has been created with password: $password"
+    echo "User $email has been created in $orgunit with password: $password"
     read -p "Press Enter to continue..."
 }
 
-# Function to create multiple users from CSV
+# Function to create multiple users from CSV with grade/job title-based OU assignment
 create_multi_user() {
     clear
     echo "Create Multiple Users (CSV)"
     echo "-------------------------"
-    echo "CSV file should have headers: firstname,lastname,username,orgunit,password"
-    echo "Note: orgunit and password columns are optional"
-    echo "Leave password blank for random passwords"
+    echo "CSV file should have headers: firstname,lastname,usertype,grade_or_jobtitle"
+    echo "- usertype: 'student' or 'staff'"
+    echo "- grade_or_jobtitle: For students: 8-12, For staff: Teacher, IT, Staff, Security, Counselor, SchoolAdmin"
+    echo "- For staff, optional username column can be provided, otherwise first initial and last name will be used"
     
     read -p "Enter CSV file path: " csvfile
     
     if [ -f "$csvfile" ]; then
         echo "Creating users from $csvfile..."
-        domain=$(gam info domain | grep "Primary Domain:" | cut -d ":" -f2 | xargs)
         
         # Create a results file
         resultfile="user_creation_results_$(date +%Y%m%d_%H%M%S).csv"
-        echo "firstname,lastname,email,password,status" > "$resultfile"
+        echo "firstname,lastname,email,orgunit,password,status" > "$resultfile"
+        
+        # Default password for all users
+        default_password="Password@1"
         
         # Skip header line and process each user
-        tail -n +2 "$csvfile" | while IFS=, read -r firstname lastname username orgunit password || [[ -n "$firstname" ]]; do
+        tail -n +2 "$csvfile" | while IFS=, read -r firstname lastname usertype grade_or_jobtitle username || [[ -n "$firstname" ]]; do
             # Remove any whitespace
             firstname=$(echo "$firstname" | xargs)
             lastname=$(echo "$lastname" | xargs)
+            usertype=$(echo "$usertype" | tr '[:upper:]' '[:lower:]' | xargs)
+            grade_or_jobtitle=$(echo "$grade_or_jobtitle" | xargs)
             username=$(echo "$username" | xargs)
-            orgunit=$(echo "$orgunit" | xargs)
-            password=$(echo "$password" | xargs)
             
-            email="${username}@${domain}"
-            
-            echo "Creating user $email..."
-            
-            # Generate random password if not provided
-            if [ -z "$password" ]; then
-                password=$(openssl rand -base64 12)
+            # Determine organizational unit based on usertype and grade/jobtitle
+            if [ "$usertype" = "student" ]; then
+                case $grade_or_jobtitle in
+                    8) orgunit="/Faculty & Staff/New Staff/" ;;
+                    9) orgunit="/Faculty &  Staff/New Staff/" ;;
+                    10) orgunit="/Faculty & Staff/New Staff/" ;;
+                    11) orgunit="/Faculty & Staff/New Staff/" ;;
+                    12) orgunit="/Faculty & Staff/New Staff/" ;;
+                    *) orgunit="/Faculty & Staff" ;;
+                esac
+                
+                # For students, format email as cadetflastname@nomma.net
+                firstinitial="${firstname:0:1}"
+                firstinitial=$(echo "$firstinitial" | tr '[:upper:]' '[:lower:]')  # convert to lowercase
+                lastname_lower=$(echo "$lastname" | tr '[:upper:]' '[:lower:]')   # convert to lowercase
+                username="cadet${firstinitial}${lastname_lower}"
+                domain="@nomma.net"
+            elif [ "$usertype" = "staff" ]; then
+                case $grade_or_jobtitle in
+                    "Teacher") orgunit="/Faculty & Staff/New Staff" ;;
+                    "IT") orgunit="/Faculty & Staff/New Staff" ;;
+                    "Staff") orgunit="/Faculty & Staff/New Staff" ;;
+                    "Security") orgunit="/Faculty & Staff/New Staff" ;;
+                    "Counselor") orgunit="/Faculty & Staff/New Staff" ;;
+                    "SchoolAdmin") orgunit="/Faculty & Staff/New Staff" ;;
+                    *) orgunit="/Faculty & Staff" ;;
+                esac
+                
+                # For staff, use provided username or generate one
+                if [ -z "$username" ]; then
+                    firstinitial="${firstname:0:1}"
+                    firstinitial=$(echo "$firstinitial" | tr '[:upper:]' '[:lower:]')
+                    lastname_lower=$(echo "$lastname" | tr '[:upper:]' '[:lower:]')
+                    username="${firstinitial}${lastname_lower}"
+                fi
+                domain="@nomma.net"
+            else
+                orgunit="/"
+                # Default email formatting if usertype is unknown
+                if [ -z "$username" ]; then
+                    firstinitial="${firstname:0:1}"
+                    firstinitial=$(echo "$firstinitial" | tr '[:upper:]' '[:lower:]')
+                    lastname_lower=$(echo "$lastname" | tr '[:upper:]' '[:lower:]')
+                    username="${firstinitial}${lastname_lower}"
+                fi
+                domain="@nomma.net"
             fi
             
-            cmd="gam create user $email firstname \"$firstname\" lastname \"$lastname\" password \"$password\""
+            email="${username}${domain}"
             
-            if [ ! -z "$orgunit" ]; then
-                cmd="$cmd org \"$orgunit\""
-            fi
+            echo "Creating user $email in $orgunit..."
+            
+            cmd="gam create user $email firstname \"$firstname\" lastname \"$lastname\" password \"$default_password\" org \"$orgunit\""
             
             if eval $cmd; then
-                echo "$firstname,$lastname,$email,$password,success" >> "$resultfile"
-                echo "User creation successful for $email"
+                echo "$firstname,$lastname,$email,$orgunit,$default_password,success" >> "$resultfile"
+                echo "User creation successful for $email in $orgunit"
             else
-                echo "$firstname,$lastname,$email,$password,failed" >> "$resultfile"
+                echo "$firstname,$lastname,$email,$orgunit,$default_password,failed" >> "$resultfile"
                 echo "User creation failed for $email"
             fi
         done
@@ -240,45 +335,162 @@ create_multi_user() {
     read -p "Press Enter to continue..."
 }
 
+# Function to create CSV template for user creation with grade/jobtitle
+create_csv_template() {
+    clear
+    echo "Create CSV Template"
+    echo "------------------"
+    echo "1. User Creation Template (with Grade/Job Title)"
+    echo "2. Password Reset Template"
+    echo "3. Archive Users Template"
+    echo "4. Lock Devices Template"
+    echo "5. Return to Main Menu"
+    
+    read -p "Select template type: " template_type
+    
+    case $template_type in
+        1)  # User Creation Template with Grade/Job Title
+            echo "firstname,lastname,usertype,grade_or_jobtitle,username" > user_creation_template.csv
+            echo "John,Doe,student,9," >> user_creation_template.csv
+            echo "Jane,Smith,staff,Teacher,jsmith" >> user_creation_template.csv
+            echo "Mike,Johnson,staff,IT," >> user_creation_template.csv
+            echo "Template saved as user_creation_template.csv"
+            echo "Note: usertype should be 'student' or 'staff'"
+            echo "For students: grade_or_jobtitle should be 8-12"
+            echo "  - Students will be placed in /cadet/[grade]th grade/"
+            echo "  - Student emails will be automatically formatted as cadetflastname@nomma.net"
+            echo "For staff: grade_or_jobtitle should be Teacher, IT, Staff, Security, Counselor, or SchoolAdmin"
+            echo "  - Staff will be placed in /Faculty & Staff/[JobTitle]"
+            echo "  - Staff emails will use the username column (if provided) or first initial + lastname"
+            echo "  - Staff domain is @nomma.net"
+            ;;
+            
+        2)  # Password Reset Template
+            echo "email" > password_reset_template.csv
+            echo "cadetjdoe@nomma.net" >> password_reset_template.csv
+            echo "jsmith@nomma.net" >> password_reset_template.csv
+            echo "Template saved as password_reset_template.csv"
+            echo "Note: All passwords will be reset to Password@1"
+            ;;
+            
+        3)  # Archive Users Template
+            echo "email,admin" > archive_users_template.csv
+            echo "cadetjdoe@nomma.net,admin@nomma.net" >> archive_users_template.csv
+            echo "jsmith@nomma.net,admin@nomma.net" >> archive_users_template.csv
+            echo "Template saved as archive_users_template.csv"
+            ;;
+            
+        4)  # Lock Devices Template
+            echo "email,deviceid" > lock_devices_template.csv
+            echo "cadetjdoe@nomma.net," >> lock_devices_template.csv
+            echo "jsmith@nomma.net,device_id_123" >> lock_devices_template.csv
+            echo "Template saved as lock_devices_template.csv"
+            ;;
+            
+        5)  # Return to Main Menu
+            return
+            ;;
+            
+        *)  echo "Invalid option"
+            ;;
+    esac
+    
+    read -p "Press Enter to continue..."
+}
 # Function to archive a single user
 archive_user() {
     clear
     echo "Archive User"
     echo "------------"
     read -p "Enter user email to archive: " useremail
-    read -p "Enter admin email to transfer data to: " adminemail
+    
+    # Extract username and domain parts
+    username=$(echo "$useremail" | cut -d'@' -f1)
+    domain=$(echo "$useremail" | cut -d'@' -f2)
     
     echo "Archiving user $useremail..."
     echo "This will:"
-    echo "1. Back up the user's data"
-    echo "2. Transfer Drive files to admin"
-    echo "3. Suspend the account"
+    echo "1. Suspend the account"
+    echo "2. Add 'inactive-' prefix to username"
+    echo "3. Reset password to random string"
+    echo "4. Replace aliases with random string"
+    echo "5. Move user to Inactive OU"
     
     read -p "Continue? (y/n): " confirm
     if [[ $confirm == [Yy]* ]]; then
-        echo "Creating backup of user data..."
-        gam create datatransfer $useremail gdrive,gmail $adminemail
+        # No data backup or transfer
         
         echo "Suspending account..."
         gam update user $useremail suspended on
         
-        echo "User $useremail has been archived"
-        echo "Data transfer to $adminemail is in progress"
+        # Generate random string for password and alias
+        random_string=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)
+        
+        # Generate random password (more complex)
+        random_password=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9!@#$%^&*()_+' | fold -w 16 | head -n 1)
+        
+        # Rename user to add "inactive-" prefix
+        new_username="inactive-$username"
+        new_email="$new_username@$domain"
+        
+        
+        echo "Resetting password to random string..."
+        gam update user $new_email password "$random_password"
+        
+        echo "Removing aliases and setting to random value..."
+        # First, get all aliases
+        gam user $new_email print aliases > tmp_aliases.txt
+        
+        # Remove all existing aliases if any exist
+        if [ -s tmp_aliases.txt ]; then
+            tail -n +2 tmp_aliases.txt | while read alias; do
+                echo "Removing alias: $alias"
+                gam user $new_email delete alias $alias
+            done
+        fi
+        
+        # Add a single random alias
+        random_alias="archived-${random_string}@$domain"
+        echo "Adding random alias: $random_alias"
+        gam user $new_email add alias $random_alias
+        
+        # Remove temporary file
+        rm -f tmp_aliases.txt
+        
+        echo "Moving user to Inactive OU..."
+        gam update user $new_email org "/Inactive"
+
+        echo "Renaming user to $new_email..."
+        gam update user $useremail primaryemail $new_email
+       
+        echo "User archiving complete:"
+        echo "- Original email: $useremail"
+        echo "- New email: $new_email"
+        echo "- Random alias: $random_alias"
+        echo "- Account suspended: Yes"
+        echo "- Password reset: Yes"
+        echo "- Moved to Inactive OU: Yes"
+        
+        # Save the information to a log file
+        log_file="archive_log_$(date +%Y%m%d_%H%M%S).txt"
+        echo "Archive log for $useremail" > "$log_file"
+        echo "Timestamp: $(date)" >> "$log_file"
+        echo "New email: $new_email" >> "$log_file"
+        echo "Random alias: $random_alias" >> "$log_file"
+        echo "Log saved to $log_file"
     else
         echo "Operation cancelled"
     fi
     
     read -p "Press Enter to continue..."
 }
-
 # Function to archive multiple users using CSV
 archive_multi_user() {
     clear
     echo "Archive Multiple Users (CSV)"
     echo "--------------------------"
-    echo "CSV file should have headers: email,admin"
+    echo "CSV file should have headers: email"
     echo "- email: The user email to archive"
-    echo "- admin: The admin email to transfer data to"
     
     read -p "Enter CSV file path: " csvfile
     
@@ -287,26 +499,61 @@ archive_multi_user() {
         
         # Create output file for results
         resultfile="archive_results_$(date +%Y%m%d_%H%M%S).csv"
-        echo "email,admin,status" > "$resultfile"
+        echo "original_email,new_email,random_alias,status" > "$resultfile"
         
         read -p "This will archive all listed users. Continue? (y/n): " confirm
         if [[ $confirm == [Yy]* ]]; then
             # Skip header line and process each user
-            tail -n +2 "$csvfile" | while IFS=, read -r email admin || [[ -n "$email" ]]; do
+            tail -n +2 "$csvfile" | while IFS=, read -r email || [[ -n "$email" ]]; do
                 # Remove any whitespace
                 email=$(echo "$email" | xargs)
-                admin=$(echo "$admin" | xargs)
                 
                 echo "Archiving $email..."
                 
-                if gam create datatransfer $email gdrive,gmail $admin && gam update user $email suspended on; then
-                    echo "$email,$admin,success" >> "$resultfile"
-                    echo "Archive successful for $email, data transfer to $admin in progress"
+                # Extract username and domain parts
+                username=$(echo "$email" | cut -d'@' -f1)
+                domain=$(echo "$email" | cut -d'@' -f2)
+                
+                # Generate random string for password and alias
+                random_string=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)
+                
+                # Generate random password (more complex)
+                random_password=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9!@#$%^&*()_+' | fold -w 16 | head -n 1)
+                
+                # Rename user to add "inactive-" prefix
+                new_username="inactive-$username"
+                new_email="$new_username@$domain"
+                
+                # Random alias
+                random_alias="archived-${random_string}@$domain"
+                
+                # Perform the archiving process
+                if gam update user $email suspended on && \
+                   gam user $email add alias $random_alias && \
+                   gam update user $email primaryemail $email &&\
+                   gam update user $email org "/Inactive" && \
+                   gam update user $new_email password "$random_password" ; then
+                   
+                    # Get all aliases and remove them (except the new random one)
+                    gam user $new_email print aliases > tmp_aliases.txt
+                    if [ -s tmp_aliases.txt ]; then
+                        tail -n +2 tmp_aliases.txt | while read alias; do
+                            if [ "$alias" != "$random_alias" ]; then
+                                gam user $new_email delete alias $alias
+                            fi
+                        done
+                    fi
+                    
+                    echo "$email,$new_email,$random_alias,success" >> "$resultfile"
+                    echo "Archive successful for $email -> $new_email"
                 else
-                    echo "$email,$admin,failed" >> "$resultfile"
+                    echo "$email,failed,failed,failed" >> "$resultfile"
                     echo "Archive failed for $email"
                 fi
             done
+            
+            # Remove temporary file
+            rm -f tmp_aliases.txt
             
             echo "Archive process complete. Results saved to $resultfile"
         else
@@ -317,7 +564,6 @@ archive_multi_user() {
     fi
     read -p "Press Enter to continue..."
 }
-
 # Function to suspend a user
 suspend_user() {
     clear
@@ -555,13 +801,12 @@ check_license() {
     
     read -p "Press Enter to continue..."
 }
-
 # Function to create CSV template
 create_csv_template() {
     clear
     echo "Create CSV Template"
     echo "------------------"
-    echo "1. User Creation Template"
+    echo "1. User Creation Template (with Grade/Job Title)"
     echo "2. Password Reset Template"
     echo "3. Archive Users Template"
     echo "4. Lock Devices Template"
@@ -570,32 +815,46 @@ create_csv_template() {
     read -p "Select template type: " template_type
     
     case $template_type in
-        1)  # User Creation Template
-            echo "firstname,lastname,username,orgunit,password" > user_creation_template.csv
-            echo "John,Doe,jdoe,/Staff," >> user_creation_template.csv
-            echo "Jane,Smith,jsmith,/Faculty,TemporaryPwd123" >> user_creation_template.csv
+        1)  # User Creation Template with Grade/Job Title
+            echo "firstname,lastname,usertype,grade_or_jobtitle,username" > user_creation_template.csv
+            echo "John,Doe,student,9," >> user_creation_template.csv
+            echo "Jane,Smith,staff,Teacher,jsmith" >> user_creation_template.csv
+            echo "Mike,Johnson,staff,IT," >> user_creation_template.csv
             echo "Template saved as user_creation_template.csv"
+            echo "Note: usertype should be 'student' or 'staff'"
+            echo "For students: grade_or_jobtitle should be 8-12"
+            echo "  - Students will be placed in /cadet/[grade]th grade/"
+            echo "  - Student emails will be automatically formatted as cadetflastname@nomma.net"
+            echo "For staff: grade_or_jobtitle should be Teacher, IT, Staff, Security, Counselor, or SchoolAdmin"
+            echo "  - Staff will be placed in /Faculty & Staff/[JobTitle]"
+            echo "  - Staff emails will use the username column (if provided) or first initial + lastname"
+            echo "  - Staff domain is @nomma.net"
             ;;
             
         2)  # Password Reset Template
-            echo "email,password" > password_reset_template.csv
-            echo "user1@example.com,NewPassword123" >> password_reset_template.csv
-            echo "user2@example.com," >> password_reset_template.csv
+            echo "email" > password_reset_template.csv
+            echo "cadetjdoe@nomma.net" >> password_reset_template.csv
+            echo "jsmith@nomma.net" >> password_reset_template.csv
             echo "Template saved as password_reset_template.csv"
+            echo "Note: All passwords will be reset to Password@1"
             ;;
             
         3)  # Archive Users Template
-            echo "email,admin" > archive_users_template.csv
-            echo "user1@example.com,admin@example.com" >> archive_users_template.csv
-            echo "user2@example.com,admin@example.com" >> archive_users_template.csv
+            echo "email" > archive_users_template.csv
+            echo "cadetjdoe@nomma.net" >> archive_users_template.csv
+            echo "jsmith@nomma.net" >> archive_users_template.csv
             echo "Template saved as archive_users_template.csv"
+            echo "Note: This template matches the format required by the Archive Multiple Users function"
             ;;
             
         4)  # Lock Devices Template
-            echo "email,deviceid" > lock_devices_template.csv
-            echo "user1@example.com," >> lock_devices_template.csv
-            echo "user2@example.com,device_id_123" >> lock_devices_template.csv
+            echo "Asset ID" > lock_devices_template.csv
+            echo "0001" >> lock_devices_template.csv
+            echo "1000" >> lock_devices_template.csv
             echo "Template saved as lock_devices_template.csv"
+            echo "Note: Enter the device's asset tag or serial number for each device to be locked"
+            echo "  - Each line should contain exactly one device identifier"
+            echo "  - All devices in this list will be locked"
             ;;
             
         5)  # Return to Main Menu
