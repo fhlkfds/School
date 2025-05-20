@@ -351,14 +351,30 @@ function New-SingleUser
     $firstName = Read-Host "Enter first name"
     $lastName = Read-Host "Enter last name"
     
+    # Handle multi-part last names
+    $lastNameParts = $lastName.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+    $processedLastName = $lastName
+    
+    if ($lastNameParts.Count -eq 2)
+    {
+        # If there are exactly two parts, join with dash
+        $processedLastName = "$($lastNameParts[0])-$($lastNameParts[1])"
+        Write-Host "Multi-part last name detected, using: $processedLastName" -ForegroundColor Yellow
+    } elseif ($lastNameParts.Count -gt 2)
+    {
+        # If there are three or more parts, use only the first two with dash
+        $processedLastName = "$($lastNameParts[0])-$($lastNameParts[1])"
+        Write-Host "Complex last name detected, using first two parts: $processedLastName" -ForegroundColor Yellow
+    }
+    
     # Get first initial
     $firstInitial = $firstName.Substring(0, 1)
     
     # Handle based on account type
     if ($accountType -eq "1")
     {
-        # Cadet account - first initial + last name
-        $baseEmail = "cadet$firstInitial$lastName@nomma.net".ToLower()
+        # Cadet account - first initial + processed last name
+        $baseEmail = "cadet$firstInitial$processedLastName@nomma.net".ToLower()
         $emailPrefix = $baseEmail.Split('@')[0]
         $domain = $baseEmail.Split('@')[1]
         $email = $baseEmail
@@ -383,6 +399,7 @@ function New-SingleUser
             Remove-Item $tempFile -Force
         }
         
+        # Rest of function remains the same...
         # Ask for grade level
         Write-Host "Select Cadet Grade Level:" -ForegroundColor Yellow
         Write-Host "1. 8th Grade" -ForegroundColor White
@@ -426,8 +443,8 @@ function New-SingleUser
         & gam create user "$email" firstname "$firstName" lastname "$lastName" password "Password@1" org "$orgUnit" changepassword on
     } else
     {
-        # Staff account - first initial + last name
-        $baseEmail = "$firstInitial$lastName@nomma.net".ToLower()
+        # Staff account - first initial + processed last name
+        $baseEmail = "$firstInitial$processedLastName@nomma.net".ToLower()
         $emailPrefix = $baseEmail.Split('@')[0]
         $domain = $baseEmail.Split('@')[1]
         $email = $baseEmail
@@ -452,6 +469,7 @@ function New-SingleUser
             Remove-Item $tempFile -Force
         }
         
+        # Rest of function remains the same...
         # Ask for staff position
         Write-Host "Select Staff Position:" -ForegroundColor Yellow
         Write-Host "1. Counselors" -ForegroundColor White
@@ -503,8 +521,6 @@ function New-SingleUser
     Read-Host "Press Enter to continue..."
 }
 
-
-
 function New-MultipleUsers
 {
     Clear-Host
@@ -552,11 +568,27 @@ function New-MultipleUsers
         
         try
         {
+            # Handle multi-part last names
+            $lastNameParts = $user.lastname.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+            $processedLastName = $user.lastname
+            
+            if ($lastNameParts.Count -eq 2)
+            {
+                # If there are exactly two parts, join with dash
+                $processedLastName = "$($lastNameParts[0])-$($lastNameParts[1])"
+                Write-Host "Multi-part last name detected for $($user.firstname) $($user.lastname), using: $processedLastName" -ForegroundColor Yellow
+            } elseif ($lastNameParts.Count -gt 2)
+            {
+                # If there are three or more parts, use only the first two with dash
+                $processedLastName = "$($lastNameParts[0])-$($lastNameParts[1])"
+                Write-Host "Complex last name detected for $($user.firstname) $($user.lastname), using first two parts: $processedLastName" -ForegroundColor Yellow
+            }
+            
             if ($accountType -eq "1")
             {
-                # Student (Cadet) account - using first initial + last name format
+                # Student (Cadet) account - using first initial + processed last name format
                 $firstInitial = $user.firstname.Substring(0, 1)
-                $baseEmail = "cadet$firstInitial$($user.lastname)@nomma.net".ToLower()
+                $baseEmail = "cadet$firstInitial$processedLastName@nomma.net".ToLower()
                 $emailPrefix = $baseEmail.Split('@')[0]
                 $domain = $baseEmail.Split('@')[1]
                 $email = $baseEmail
@@ -581,6 +613,7 @@ function New-MultipleUsers
                     Remove-Item $tempFile -Force
                 }
                 
+                # Rest of function remains the same...
                 # Map grade to OU
                 $gradeOU = switch ($user.grade)
                 {
@@ -613,9 +646,9 @@ function New-MultipleUsers
                 & gam create user "$email" firstname "$($user.firstname)" lastname "$($user.lastname)" password "Password@1" org "$gradeOU" changepassword on
             } else
             {
-                # Staff account - first initial + last name
+                # Staff account - first initial + processed last name
                 $firstInitial = $user.firstname.Substring(0, 1)
-                $baseEmail = "$firstInitial$($user.lastname)@nomma.net".ToLower()
+                $baseEmail = "$firstInitial$processedLastName@nomma.net".ToLower()
                 $emailPrefix = $baseEmail.Split('@')[0]
                 $domain = $baseEmail.Split('@')[1]
                 $email = $baseEmail
@@ -640,6 +673,7 @@ function New-MultipleUsers
                     Remove-Item $tempFile -Force
                 }
                 
+                # Rest of function remains the same...
                 # Map position to OU
                 $positionOU = switch -Regex ($user.position)
                 {
@@ -693,6 +727,9 @@ function New-MultipleUsers
         })
     Read-Host "Press Enter to continue..."
 }
+
+
+
 
 
 
