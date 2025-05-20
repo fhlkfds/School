@@ -36,7 +36,7 @@ function Show-PasswordMenu
     Write-Host "Enter your choice [1-3]: " -ForegroundColor Yellow -NoNewline
 }
 
-# Function to display user management submenu
+# Function to display user management submenu (modified)
 function Show-UserMenu
 {
     Clear-Host
@@ -50,8 +50,9 @@ function Show-UserMenu
     Write-Host "5. Suspend User" -ForegroundColor White
     Write-Host "6. Unsuspend User" -ForegroundColor White
     Write-Host "7. Delete User" -ForegroundColor White
-    Write-Host "8. Return to Main Menu" -ForegroundColor White
-    Write-Host "Enter your choice [1-8]: " -ForegroundColor Yellow -NoNewline
+    Write-Host "8. Move Users to Grade OU (CSV)" -ForegroundColor White
+    Write-Host "9. Return to Main Menu" -ForegroundColor White
+    Write-Host "Enter your choice [1-9]: " -ForegroundColor Yellow -NoNewline
 }
 
 # Function to display device management submenu
@@ -111,6 +112,89 @@ function Reset-SinglePassword
     Read-Host "Press Enter to continue..."
 }
 
+
+
+# Function to move users to different OUs based on grade level from CSV
+function Move-UsersToGradeOU
+{
+    Clear-Host
+    Write-Host "Move Users to Grade-Based OU (CSV)" -ForegroundColor Cyan
+    Write-Host "--------------------------------" -ForegroundColor Cyan
+    Write-Host "CSV format should be: email,grade" -ForegroundColor Yellow
+    Write-Host "Grade values: 8, 9, 10, 10email (for 10th with email), 11, 12" -ForegroundColor Yellow
+    $csvPath = Read-Host "Enter path to CSV file"
+    
+    if (-not (Test-Path $csvPath))
+    {
+        Write-Host "Error: File not found!" -ForegroundColor Red
+        Read-Host "Press Enter to continue..."
+        return
+    }
+    
+    $users = Import-Csv $csvPath
+    $successCount = 0
+    $errorCount = 0
+    
+    foreach ($user in $users)
+    {
+        if ([string]::IsNullOrEmpty($user.email) -or [string]::IsNullOrEmpty($user.grade))
+        {
+            Write-Host "Skipping invalid entry: Missing email or grade" -ForegroundColor Yellow
+            $errorCount++
+            continue
+        }
+        
+        # Map grade to OU
+        $gradeOU = switch ($user.grade)
+        {
+            "8"
+            { "/Cadets/8th Grade" 
+            }
+            "9"
+            { "/Cadets/9th Grade" 
+            }
+            "10"
+            { "/Cadets/10th Grade" 
+            }
+            "10email"
+            { "/Cadets/10th Grade with Email Privileges" 
+            }
+            "11"
+            { "/Cadets/11th Grade" 
+            }
+            "12"
+            { "/Cadets/12th Grade" 
+            }
+            default
+            { 
+                Write-Host "Invalid grade value for $($user.email): $($user.grade)" -ForegroundColor Yellow
+                $errorCount++
+                continue
+            }
+        }
+        
+        try
+        {
+            Write-Host "Moving user $($user.email) to $gradeOU..." -ForegroundColor Yellow
+            & gam update user "$($user.email)" org "$gradeOU"
+            Write-Host "Move successful for $($user.email)" -ForegroundColor Green
+            $successCount++
+        } catch
+        {
+            Write-Host "Error moving user $($user.email): $_" -ForegroundColor Red
+            $errorCount++
+        }
+    }
+    
+    Write-Host "`nUser moving complete!" -ForegroundColor Cyan
+    Write-Host "Successfully moved: $successCount" -ForegroundColor Green
+    Write-Host "Failed operations: $errorCount" -ForegroundColor $(if ($errorCount -gt 0)
+        { "Red" 
+        } else
+        { "Green" 
+        })
+    Read-Host "Press Enter to continue..."
+}
 # Function to unlock a single Chromebook by asset ID
 function Unlock-SingleChromebook
 {
@@ -249,7 +333,8 @@ function Reset-MassPasswords
 }
 
 
-# Function to create a single user
+
+
 function New-SingleUser
 {
     Clear-Host
@@ -266,11 +351,37 @@ function New-SingleUser
     $firstName = Read-Host "Enter first name"
     $lastName = Read-Host "Enter last name"
     
+    # Get first initial
+    $firstInitial = $firstName.Substring(0, 1)
+    
     # Handle based on account type
     if ($accountType -eq "1")
     {
-        # Cadet account
-        $email = "cadet$firstName$lastName@nomma.net".ToLower()
+        # Cadet account - first initial + last name
+        $baseEmail = "cadet$firstInitial$lastName@nomma.net".ToLower()
+        $emailPrefix = $baseEmail.Split('@')[0]
+        $domain = $baseEmail.Split('@')[1]
+        $email = $baseEmail
+        $counter = 0
+        
+        # Check if the base email exists - uses correct pattern matching for "Does not exist"
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        & gam info user $email > $tempFile 2>&1
+        $output = Get-Content $tempFile -Raw
+        Remove-Item $tempFile -Force
+        
+        # Continue checking until we find an email that DOES NOT exist
+        while ($output -notmatch "Does not exist")
+        {
+            $counter++
+            $email = "$emailPrefix$counter@$domain"
+            Write-Host "Email $baseEmail already exists, trying $email..." -ForegroundColor Yellow
+            
+            $tempFile = [System.IO.Path]::GetTempFileName()
+            & gam info user $email > $tempFile 2>&1
+            $output = Get-Content $tempFile -Raw
+            Remove-Item $tempFile -Force
+        }
         
         # Ask for grade level
         Write-Host "Select Cadet Grade Level:" -ForegroundColor Yellow
@@ -316,8 +427,30 @@ function New-SingleUser
     } else
     {
         # Staff account - first initial + last name
-        $firstInitial = $firstName.Substring(0, 1)
-        $email = "$firstInitial$lastName@nomma.net".ToLower()
+        $baseEmail = "$firstInitial$lastName@nomma.net".ToLower()
+        $emailPrefix = $baseEmail.Split('@')[0]
+        $domain = $baseEmail.Split('@')[1]
+        $email = $baseEmail
+        $counter = 0
+        
+        # Check if the base email exists - uses correct pattern matching for "Does not exist"
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        & gam info user $email > $tempFile 2>&1
+        $output = Get-Content $tempFile -Raw
+        Remove-Item $tempFile -Force
+        
+        # Continue checking until we find an email that DOES NOT exist
+        while ($output -notmatch "Does not exist")
+        {
+            $counter++
+            $email = "$emailPrefix$counter@$domain"
+            Write-Host "Email $baseEmail already exists, trying $email..." -ForegroundColor Yellow
+            
+            $tempFile = [System.IO.Path]::GetTempFileName()
+            & gam info user $email > $tempFile 2>&1
+            $output = Get-Content $tempFile -Raw
+            Remove-Item $tempFile -Force
+        }
         
         # Ask for staff position
         Write-Host "Select Staff Position:" -ForegroundColor Yellow
@@ -370,7 +503,8 @@ function New-SingleUser
     Read-Host "Press Enter to continue..."
 }
 
-# Function to create multiple users from CSV
+
+
 function New-MultipleUsers
 {
     Clear-Host
@@ -420,8 +554,32 @@ function New-MultipleUsers
         {
             if ($accountType -eq "1")
             {
-                # Student (Cadet) account
-                $email = "cadet$($user.firstname)$($user.lastname)@nomma.net".ToLower()
+                # Student (Cadet) account - using first initial + last name format
+                $firstInitial = $user.firstname.Substring(0, 1)
+                $baseEmail = "cadet$firstInitial$($user.lastname)@nomma.net".ToLower()
+                $emailPrefix = $baseEmail.Split('@')[0]
+                $domain = $baseEmail.Split('@')[1]
+                $email = $baseEmail
+                $counter = 0
+                
+                # Check if the base email exists - using correct pattern matching for "Does not exist"
+                $tempFile = [System.IO.Path]::GetTempFileName()
+                & gam info user $email > $tempFile 2>&1
+                $output = Get-Content $tempFile -Raw
+                Remove-Item $tempFile -Force
+                
+                # Continue checking until we find an email that DOES NOT exist
+                while ($output -notmatch "Does not exist")
+                {
+                    $counter++
+                    $email = "$emailPrefix$counter@$domain"
+                    Write-Host "Email $baseEmail already exists, trying $email..." -ForegroundColor Yellow
+                    
+                    $tempFile = [System.IO.Path]::GetTempFileName()
+                    & gam info user $email > $tempFile 2>&1
+                    $output = Get-Content $tempFile -Raw
+                    Remove-Item $tempFile -Force
+                }
                 
                 # Map grade to OU
                 $gradeOU = switch ($user.grade)
@@ -457,7 +615,30 @@ function New-MultipleUsers
             {
                 # Staff account - first initial + last name
                 $firstInitial = $user.firstname.Substring(0, 1)
-                $email = "$firstInitial$($user.lastname)@nomma.net".ToLower()
+                $baseEmail = "$firstInitial$($user.lastname)@nomma.net".ToLower()
+                $emailPrefix = $baseEmail.Split('@')[0]
+                $domain = $baseEmail.Split('@')[1]
+                $email = $baseEmail
+                $counter = 0
+                
+                # Check if the base email exists - using correct pattern matching for "Does not exist"
+                $tempFile = [System.IO.Path]::GetTempFileName()
+                & gam info user $email > $tempFile 2>&1
+                $output = Get-Content $tempFile -Raw
+                Remove-Item $tempFile -Force
+                
+                # Continue checking until we find an email that DOES NOT exist
+                while ($output -notmatch "Does not exist")
+                {
+                    $counter++
+                    $email = "$emailPrefix$counter@$domain"
+                    Write-Host "Email $baseEmail already exists, trying $email..." -ForegroundColor Yellow
+                    
+                    $tempFile = [System.IO.Path]::GetTempFileName()
+                    & gam info user $email > $tempFile 2>&1
+                    $output = Get-Content $tempFile -Raw
+                    Remove-Item $tempFile -Force
+                }
                 
                 # Map position to OU
                 $positionOU = switch -Regex ($user.position)
@@ -1440,7 +1621,8 @@ function Show-TemplateMenu
     Write-Host "4. Archive Multiple Users Template" -ForegroundColor White
     Write-Host "5. Lock Multiple Devices Template" -ForegroundColor White
     Write-Host "6. Wipe Multiple Devices Template" -ForegroundColor White
-    Write-Host "7. Return to Main Menu" -ForegroundColor White
+    Write-Host "7. Move Users to Grade OU Template" -ForegroundColor White
+    Write-Host "8. Return to Main Menu" -ForegroundColor White
     Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host "Enter your choice [1-7]: " -ForegroundColor Yellow -NoNewline
     
@@ -1467,6 +1649,9 @@ function Show-TemplateMenu
         { Show-WipeDevicesTemplate 
         }
         "7"
+        { Show-MoveUsersTemplate
+        }
+        "8"
         { return 
         }
         default
@@ -1476,6 +1661,34 @@ function Show-TemplateMenu
             Show-TemplateMenu
         }
     }
+}
+
+
+# Function to show and export move users template
+function Show-MoveUsersTemplate
+{
+    Clear-Host
+    Write-Host "Move Users to Grade OU Template" -ForegroundColor Cyan
+    Write-Host "-----------------------------" -ForegroundColor Cyan
+    
+    $template = @"
+email,grade
+cadetjohndoe@nomma.net,8
+cadetjanesmith@nomma.net,9
+cadetmikebrown@nomma.net,10
+cadetsamjones@nomma.net,10email
+cadetannahall@nomma.net,11
+cadetbengreen@nomma.net,12
+"@
+    
+    Write-Host "CSV Format:" -ForegroundColor Yellow
+    Write-Host $template -ForegroundColor White
+    Write-Host "`nNotes:" -ForegroundColor Yellow
+    Write-Host "- Valid grade values: 8, 9, 10, 10email (for 10th with email), 11, 12" -ForegroundColor White
+    Write-Host "- Users will be moved to the corresponding grade OU" -ForegroundColor White
+    Write-Host "- Save as a .csv file before using." -ForegroundColor White
+    
+    Save-TemplateOption "move_users_template.csv" $template
 }
 
 # Function to show and export password reset template
@@ -1748,6 +1961,9 @@ while (-not $exit)
                     { Remove-User 
                     }
                     "8"
+                    { Move-UsersToGradeOU
+                    }
+                    "9"
                     { $userExit = $true 
                     }
                     default
