@@ -63,6 +63,8 @@ function Show-DeviceMenu
     Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host "1. Lock Single Mobile Device" -ForegroundColor White
     Write-Host "2. Lock Multiple Mobile Devices (CSV)" -ForegroundColor White
+    Write-Host "3. Unlock Single Device" -ForegroundColor White
+    Write-Host "4. Unlock Multiple Devices (CSV)" -ForegroundColor White
     Write-Host "3. Wipe Device" -ForegroundColor White
     Write-Host "4. Wipe Multiple Devices (CSV)" -ForegroundColor White
     Write-Host "5. List All Devices" -ForegroundColor White
@@ -108,6 +110,84 @@ function Reset-SinglePassword
     Write-Host "Password has been reset for $userEmail" -ForegroundColor Green
     Read-Host "Press Enter to continue..."
 }
+
+# Function to unlock a single Chromebook by asset ID
+function Unlock-SingleChromebook
+{
+    Clear-Host
+    Write-Host "Unlock Single Chromebook" -ForegroundColor Cyan
+    Write-Host "----------------------" -ForegroundColor Cyan
+    $assetID = Read-Host "Enter Chromebook asset ID"
+    
+    if ([string]::IsNullOrWhiteSpace($assetID))
+    {
+        Write-Host "Error: Asset ID cannot be empty" -ForegroundColor Red
+        Read-Host "Press Enter to continue..."
+        return
+    }
+    
+    Write-Host "Unlocking Chromebook with asset ID $assetID..." -ForegroundColor Yellow
+    
+    # The command to unlock a Chrome device by asset ID
+    & gam update cros query "asset_id:$assetID" action unlock
+    
+    Write-Host "Unlock command has been sent to the device" -ForegroundColor Green
+    Read-Host "Press Enter to continue..."
+}
+
+# Function to unlock multiple Chromebooks from CSV by asset ID
+function Unlock-MultipleChromebooks
+{
+    Clear-Host
+    Write-Host "Unlock Multiple Chromebooks (CSV)" -ForegroundColor Cyan
+    Write-Host "-------------------------------" -ForegroundColor Cyan
+    Write-Host "CSV format should be: asset_id" -ForegroundColor Yellow
+    $csvPath = Read-Host "Enter path to CSV file"
+    
+    if (-not (Test-Path $csvPath))
+    {
+        Write-Host "Error: File not found!" -ForegroundColor Red
+        Read-Host "Press Enter to continue..."
+        return
+    }
+    
+    $devices = Import-Csv $csvPath
+    $successCount = 0
+    $errorCount = 0
+    
+    foreach ($device in $devices)
+    {
+        if ([string]::IsNullOrEmpty($device.asset_id))
+        {
+            Write-Host "Skipping invalid entry: Missing asset_id" -ForegroundColor Yellow
+            $errorCount++
+            continue
+        }
+        
+        try
+        {
+            Write-Host "Unlocking Chromebook with asset ID $($device.asset_id)..." -ForegroundColor Yellow
+            & gam update cros query "asset_id:$($device.asset_id)" action unlock
+            Write-Host "Unlock command sent successfully" -ForegroundColor Green
+            $successCount++
+        } catch
+        {
+            Write-Host "Error unlocking device: $_" -ForegroundColor Red
+            $errorCount++
+        }
+    }
+    
+    Write-Host "`nChromebook unlocking complete!" -ForegroundColor Cyan
+    Write-Host "Successfully unlocked: $successCount" -ForegroundColor Green
+    Write-Host "Failed operations: $errorCount" -ForegroundColor $(if ($errorCount -gt 0)
+        { "Red" 
+        } else
+        { "Green" 
+        })
+    Read-Host "Press Enter to continue..."
+}
+
+
 
 # Function to perform mass password reset from CSV
 function Reset-MassPasswords
@@ -725,33 +805,38 @@ function Remove-User
     Read-Host "Press Enter to continue..."
 }
 
-# Function to lock a single mobile device
-function Lock-SingleDevice
+
+# Function to lock a single Chromebook by asset ID
+function Lock-SingleChromebook
 {
     Clear-Host
-    Write-Host "Lock Single Mobile Device" -ForegroundColor Cyan
-    Write-Host "----------------------" -ForegroundColor Cyan
-    $userEmail = Read-Host "Enter user email"
+    Write-Host "Lock Single Chromebook" -ForegroundColor Cyan
+    Write-Host "--------------------" -ForegroundColor Cyan
+    $assetID = Read-Host "Enter Chromebook asset ID"
     
-    # List devices for the user
-    Write-Host "Listing devices for $userEmail..." -ForegroundColor Yellow
-    & gam print mobile query "user:$userEmail" | Out-Host
+    if ([string]::IsNullOrWhiteSpace($assetID))
+    {
+        Write-Host "Error: Asset ID cannot be empty" -ForegroundColor Red
+        Read-Host "Press Enter to continue..."
+        return
+    }
     
-    $deviceId = Read-Host "Enter device ID to lock"
+    Write-Host "Locking Chromebook with asset ID $assetID..." -ForegroundColor Yellow
     
-    Write-Host "Locking device $deviceId for $userEmail..." -ForegroundColor Yellow
-    & gam user "$userEmail" update mobile "$deviceId" action accountlock
-    Write-Host "Device has been locked" -ForegroundColor Green
+    # The command to lock a Chrome device by asset ID
+    & gam update cros query "asset_id:$assetID" action disable
+    
+    Write-Host "Lock command has been sent to the device" -ForegroundColor Green
     Read-Host "Press Enter to continue..."
 }
 
-# Function to lock multiple mobile devices from CSV
-function Lock-MultipleDevices
+# Function to lock multiple Chromebooks from CSV by asset ID
+function Lock-MultipleChromebooks
 {
     Clear-Host
-    Write-Host "Lock Multiple Mobile Devices (CSV)" -ForegroundColor Cyan
-    Write-Host "-------------------------------" -ForegroundColor Cyan
-    Write-Host "CSV format should be: email,deviceid" -ForegroundColor Yellow
+    Write-Host "Lock Multiple Chromebooks (CSV)" -ForegroundColor Cyan
+    Write-Host "-----------------------------" -ForegroundColor Cyan
+    Write-Host "CSV format should be: asset_id" -ForegroundColor Yellow
     $csvPath = Read-Host "Enter path to CSV file"
     
     if (-not (Test-Path $csvPath))
@@ -767,18 +852,18 @@ function Lock-MultipleDevices
     
     foreach ($device in $devices)
     {
-        if ([string]::IsNullOrEmpty($device.email) -or [string]::IsNullOrEmpty($device.deviceid))
+        if ([string]::IsNullOrEmpty($device.asset_id))
         {
-            Write-Host "Skipping invalid entry" -ForegroundColor Yellow
+            Write-Host "Skipping invalid entry: Missing asset_id" -ForegroundColor Yellow
             $errorCount++
             continue
         }
         
         try
         {
-            Write-Host "Locking device $($device.deviceid) for $($device.email)..." -ForegroundColor Yellow
-            & gam user "$($device.email)" update mobile "$($device.deviceid)" action accountlock
-            Write-Host "Device lock successful" -ForegroundColor Green
+            Write-Host "Locking Chromebook with asset ID $($device.asset_id)..." -ForegroundColor Yellow
+            & gam update cros query "asset_id:$($device.asset_id)" action disable
+            Write-Host "Lock command sent successfully" -ForegroundColor Green
             $successCount++
         } catch
         {
@@ -787,7 +872,7 @@ function Lock-MultipleDevices
         }
     }
     
-    Write-Host "`nDevice locking complete!" -ForegroundColor Cyan
+    Write-Host "`nChromebook locking complete!" -ForegroundColor Cyan
     Write-Host "Successfully locked: $successCount" -ForegroundColor Green
     Write-Host "Failed operations: $errorCount" -ForegroundColor $(if ($errorCount -gt 0)
         { "Red" 
@@ -796,6 +881,8 @@ function Lock-MultipleDevices
         })
     Read-Host "Press Enter to continue..."
 }
+
+
 
 # Function to wipe a device
 function Wipe-Device
@@ -1682,21 +1769,27 @@ while (-not $exit)
                 switch ($deviceChoice)
                 {
                     "1"
-                    { Lock-SingleDevice 
+                    { Lock-SingleChromebook
                     }
                     "2"
-                    { Lock-MultipleDevices 
+                    { Lock-MultipleChromebooks
                     }
                     "3"
-                    { Wipe-Device 
+                    { Unlock-SingleChromebook
                     }
                     "4"
-                    { Wipe-MultipleDevices 
+                    { Unlock-MultipleChromebooks
                     }
                     "5"
-                    { List-Devices 
+                    { Wipe-Device 
                     }
                     "6"
+                    { Wipe-MultipleDevices 
+                    }
+                    "7"
+                    { List-Devices 
+                    }
+                    "8"
                     { $deviceExit = $true 
                     }
                     default

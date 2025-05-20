@@ -562,6 +562,7 @@ function Get-CartUtilization
     Get-UserActivity
     Get-UserActivity -ExportPath "C:\Reports\user_activity.csv"
 #>
+
 function Get-UserActivity
 {
     [CmdletBinding()]
@@ -584,6 +585,10 @@ function Get-UserActivity
         # Get most active users (top 10)
         $lastMonth = (Get-Date).AddDays(-30)
         $recentActivity = $activityLog.rows | Where-Object {
+            # Add null check and empty string check
+            $_.created_at -and 
+            $_.created_at.date -and 
+            ![string]::IsNullOrEmpty($_.created_at.date) -and
             [DateTime]::Parse($_.created_at.date) -ge $lastMonth
         }
         
@@ -615,7 +620,11 @@ function Get-UserActivity
         # Get recent logins (from users endpoint)
         $users = Invoke-ApiCall -Url "$Script:SnipeITBaseUrl/api/v1/users?limit=100" -Headers $Script:SnipeITHeaders
         $recentLogins = $users.rows | Where-Object { 
-            $_.last_login -and [DateTime]::Parse($_.last_login.date) -ge $lastMonth 
+            # Enhanced null checking before parsing date
+            $_.last_login -and 
+            $_.last_login.date -and 
+            ![string]::IsNullOrEmpty($_.last_login.date) -and
+            [DateTime]::Parse($_.last_login.date) -ge $lastMonth 
         } | Sort-Object last_login.date -Descending | Select-Object -First 10 |
         Select-Object @{Name='UserName'; Expression={$_.name}}, 
         @{Name='LastLogin'; Expression={$_.last_login.date}},
@@ -659,6 +668,8 @@ function Get-UserActivity
     }
 }
 
+
+
 #endregion
 
 #region 5. Warranty Status
@@ -681,6 +692,9 @@ function Get-UserActivity
     Get-WarrantyStatus
     Get-WarrantyStatus -DaysAhead 60 -ExportPath "C:\Reports\warranty_status.csv"
 #>
+
+# Modified Get-WarrantyStatus function with comprehensive fixes for the "N/A" issue
+
 function Get-WarrantyStatus
 {
     [CmdletBinding()]
@@ -729,6 +743,17 @@ function Get-WarrantyStatus
                 $status = "No Warranty Data"
             }
             
+            # Create a properly formatted purchase cost 
+            $purchaseCost = $null
+            if ($asset.purchase_cost -and ![string]::IsNullOrEmpty($asset.purchase_cost))
+            {
+                # Try to parse the purchase cost - if successful use the value, otherwise use null
+                $tempCost = 0
+                if ([double]::TryParse($asset.purchase_cost, [ref]$tempCost)) {
+                    $purchaseCost = $tempCost
+                }
+            }
+            
             [PSCustomObject]@{
                 AssetTag = $asset.asset_tag
                 Name = $asset.name
@@ -749,9 +774,10 @@ function Get-WarrantyStatus
                 } else
                 { "N/A" 
                 }
-                PurchaseCost = if ($asset.purchase_cost)
-                { $asset.purchase_cost 
-                } else
+                PurchaseCost = $purchaseCost
+                PurchaseCostDisplay = if ($purchaseCost -ne $null) 
+                { $purchaseCost.ToString("0.00") 
+                } else 
                 { "N/A" 
                 }
             }
@@ -764,10 +790,11 @@ function Get-WarrantyStatus
         $noData = $warrantyAnalysis | Where-Object Status -eq "No Warranty Data"
         
         # Identify high-risk gaps (expensive assets with expired/no warranty)
+        # Only include assets where PurchaseCost is a number and >= 1000
         $highRiskAssets = $warrantyAnalysis | Where-Object {
             ($_.Status -eq "Expired" -or $_.Status -eq "No Warranty Data") -and
-            $_.PurchaseCost -and [double]$_.PurchaseCost -ge 1000
-        } | Sort-Object @{Expression={[double]$_.PurchaseCost}; Descending=$true}
+            $_.PurchaseCost -ne $null -and $_.PurchaseCost -ge 1000
+        } | Sort-Object -Property PurchaseCost -Descending
         
         # Create summary
         $warrantySummary = [PSCustomObject]@{
@@ -796,13 +823,18 @@ function Get-WarrantyStatus
         {
             Write-Host "`n=== HIGH-RISK WARRANTY GAPS ===" -ForegroundColor Red
             $highRiskAssets | Select-Object -First 10 |
-                Format-Table AssetTag, Name, Status, PurchaseCost -AutoSize
+                Format-Table AssetTag, Name, Status, PurchaseCostDisplay -AutoSize
         }
         
-        # Export if requested
+        # Export if requested - use PurchaseCostDisplay for exporting
         if ($ExportPath)
         {
-            Export-ToCsv -Data $warrantyAnalysis -FilePath $ExportPath
+            # Create a proper export object that uses the display value instead of the numeric value
+            $exportData = $warrantyAnalysis | Select-Object AssetTag, Name, Model, WarrantyExpires, 
+                Status, DaysRemaining, PurchaseDate, 
+                @{Name='PurchaseCost'; Expression={$_.PurchaseCostDisplay}}
+                
+            Export-ToCsv -Data $exportData -FilePath $ExportPath
         }
         
         return @{
@@ -817,6 +849,7 @@ function Get-WarrantyStatus
         Write-Error "Failed to retrieve warranty status: $($_.Exception.Message)"
     }
 }
+
 
 #endregion
 
@@ -1031,129 +1064,163 @@ function Get-LicenseManagement
     Get-LocationDistribution
     Get-LocationDistribution -ExportPath "C:\Reports\location_distribution.csv"
 #>
-function Get-LocationDistribution
-{
+
+
+function Get-LocationDistribution {
     [CmdletBinding()]
-    param(
+    param (
+        [Parameter(Mandatory=$false)]
         [string]$ExportPath
     )
-    
-    if (-not $Script:SnipeITBaseUrl)
-    {
-        throw "Snipe-IT connection not initialized. Run Initialize-SnipeITConnection first."
-    }
-    
-    try
-    {
+
+    try {
         Write-Host "Analyzing location distribution..." -ForegroundColor Yellow
         
+        # Get all assets
+        $allAssets = Get-SnipeitAsset -all
+        
         # Get all locations
-        $allLocations = Invoke-ApiCall -Url "$Script:SnipeITBaseUrl/api/v1/locations?limit=500" -Headers $Script:SnipeITHeaders
+        $locations = Get-SnipeitLocation -all
         
-        # Get assets with location information
-        $allAssets = Invoke-ApiCall -Url "$Script:SnipeITBaseUrl/api/v1/hardware?limit=1000" -Headers $Script:SnipeITHeaders
+        # Create a hashtable to store the location distribution
+        $locationStats = @{}
         
-        # Analyze asset distribution by location
-        $locationDistribution = $allLocations.rows | ForEach-Object {
-            $location = $_
-            $assetsAtLocation = $allAssets.rows | Where-Object { 
-                $_.location -and $_.location.id -eq $location.id 
+        # Initialize the hashtable with all locations
+        foreach ($location in $locations) {
+            $locationStats[$location.id] = @{
+                'Name' = $location.name
+                'Address' = $location.address
+                'Count' = 0
+                'Assets' = @()
+            }
+        }
+        
+        # Count assets per location
+        foreach ($asset in $allAssets) {
+            # Safe check for location_id
+            if ($asset.location -and $asset.location.id) {
+                $locationId = $asset.location.id
+                $locationStats[$locationId]['Count']++
+                
+                # Create asset info object with safe date parsing
+                $assetInfo = @{
+                    'Tag' = $asset.asset_tag
+                    'Name' = $asset.name
+                    'Serial' = $asset.serial
+                    'Status' = $asset.status_label.name
+                }
+                
+                # Safely parse dates - handle empty values
+                if (-not [string]::IsNullOrEmpty($asset.created_at)) {
+                    $success = [DateTime]::TryParse($asset.created_at, [ref]$createdDate)
+                    $assetInfo['Created'] = if ($success) { $createdDate } else { $null }
+                } else {
+                    $assetInfo['Created'] = $null
+                }
+                
+                if (-not [string]::IsNullOrEmpty($asset.updated_at)) {
+                    $success = [DateTime]::TryParse($asset.updated_at, [ref]$updatedDate)
+                    $assetInfo['Updated'] = if ($success) { $updatedDate } else { $null }
+                } else {
+                    $assetInfo['Updated'] = $null
+                }
+                
+                if (-not [string]::IsNullOrEmpty($asset.last_checkout)) {
+                    $success = [DateTime]::TryParse($asset.last_checkout, [ref]$checkoutDate)
+                    $assetInfo['LastCheckout'] = if ($success) { $checkoutDate } else { $null }
+                } else {
+                    $assetInfo['LastCheckout'] = $null
+                }
+                
+                if (-not [string]::IsNullOrEmpty($asset.expected_checkin)) {
+                    $success = [DateTime]::TryParse($asset.expected_checkin, [ref]$expectedDate)
+                    $assetInfo['ExpectedCheckin'] = if ($success) { $expectedDate } else { $null }
+                } else {
+                    $assetInfo['ExpectedCheckin'] = $null
+                }
+                
+                # Add asset to location's asset list
+                $locationStats[$locationId]['Assets'] += $assetInfo
+            }
+        }
+        
+        # Display the results
+        $sortedLocations = $locationStats.GetEnumerator() | Sort-Object { $_.Value.Count } -Descending
+        
+        Write-Host "`nLocation Distribution:" -ForegroundColor Cyan
+        Write-Host "======================" -ForegroundColor Cyan
+        
+        foreach ($location in $sortedLocations) {
+            $locationData = $location.Value
+            Write-Host "$($locationData.Name): $($locationData.Count) assets" -ForegroundColor Green
+            
+            if ($locationData.Count -gt 0) {
+                $statusBreakdown = $locationData.Assets | Group-Object Status | 
+                                  Select-Object @{N='Status';E={$_.Name}}, @{N='Count';E={$_.Count}}
+                
+                Write-Host "  Status Breakdown:" -ForegroundColor Yellow
+                foreach ($status in $statusBreakdown) {
+                    Write-Host "    $($status.Status): $($status.Count)" -ForegroundColor Gray
+                }
             }
             
-            [PSCustomObject]@{
-                LocationName = $location.name
-                LocationId = $location.id
-                Address = "$($location.address), $($location.city), $($location.state) $($location.zip)"
-                AssetCount = $assetsAtLocation.Count
-                AssignedUsers = $location.assigned_users_count
-                AssignedAssets = $location.assigned_assets_count
-                Currency = if ($location.currency)
-                { $location.currency 
-                } else
-                { "N/A" 
-                }
-                Parent = if ($location.parent)
-                { $location.parent.name 
-                } else
-                { "Root Location" 
+            Write-Host ""
+        }
+        
+        # Export to CSV if requested
+        if ($ExportPath) {
+            $exportData = foreach ($location in $sortedLocations) {
+                $locationData = $location.Value
+                
+                if ($locationData.Count -gt 0) {
+                    foreach ($asset in $locationData.Assets) {
+                        [PSCustomObject]@{
+                            LocationName = $locationData.Name
+                            LocationAddress = $locationData.Address
+                            AssetTag = $asset.Tag
+                            AssetName = $asset.Name
+                            SerialNumber = $asset.Serial
+                            Status = $asset.Status
+                            Created = $asset.Created
+                            Updated = $asset.Updated
+                            LastCheckout = $asset.LastCheckout
+                            ExpectedCheckin = $asset.ExpectedCheckin
+                        }
+                    }
+                } else {
+                    [PSCustomObject]@{
+                        LocationName = $locationData.Name
+                        LocationAddress = $locationData.Address
+                        AssetTag = ""
+                        AssetName = ""
+                        SerialNumber = ""
+                        Status = ""
+                        Created = $null
+                        Updated = $null
+                        LastCheckout = $null
+                        ExpectedCheckin = $null
+                    }
                 }
             }
-        } | Sort-Object AssetCount -Descending
-        
-        # Get activity log to identify high-turnover locations
-        $activityLog = Invoke-ApiCall -Url "$Script:SnipeITBaseUrl/api/v1/reports/activity?limit=1000" -Headers $Script:SnipeITHeaders
-        
-        # Analyze location turnover (checkouts/checkins/transfers in last 30 days)
-        $lastMonth = (Get-Date).AddDays(-30)
-        $locationActivity = $activityLog.rows | Where-Object {
-            [DateTime]::Parse($_.created_at.date) -ge $lastMonth -and
-            ($_.action_type -eq "checkout" -or $_.action_type -eq "checkin" -or $_.action_type -eq "transfer")
-        } | Group-Object { if ($_.location)
-            { $_.location.name 
-            } else
-            { "Unknown" 
-            } } |
-        ForEach-Object {
-            [PSCustomObject]@{
-                LocationName = $_.Name
-                ActivityCount = $_.Count
-                CheckOuts = ($_.Group | Where-Object action_type -eq "checkout").Count
-                CheckIns = ($_.Group | Where-Object action_type -eq "checkin").Count
-                Transfers = ($_.Group | Where-Object action_type -eq "transfer").Count
+            
+            try {
+                $exportData | Export-Csv -Path $ExportPath -NoTypeInformation
+                Write-Host "Location distribution exported to: $ExportPath" -ForegroundColor Green
+            } catch {
+                Write-Host "Error exporting to CSV: $($_.Exception.Message)" -ForegroundColor Red
             }
-        } | Sort-Object ActivityCount -Descending
-        
-        # Calculate summary statistics
-        $totalAssets = ($locationDistribution | Measure-Object AssetCount -Sum).Sum
-        $totalLocations = $locationDistribution.Count
-        $averageAssetsPerLocation = if ($totalLocations -gt 0)
-        { 
-            [math]::Round($totalAssets / $totalLocations, 2) 
-        } else
-        { 0 
         }
         
-        # Create summary
-        $distributionSummary = [PSCustomObject]@{
-            TotalLocations = $totalLocations
-            TotalAssets = $totalAssets
-            AverageAssetsPerLocation = $averageAssetsPerLocation
-            LocationsWithAssets = ($locationDistribution | Where-Object AssetCount -gt 0).Count
-            EmptyLocations = ($locationDistribution | Where-Object AssetCount -eq 0).Count
-            HighestAssetCount = ($locationDistribution | Measure-Object AssetCount -Maximum).Maximum
-            LastUpdated = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        }
-        
-        # Display results
-        Write-Host "`n=== LOCATION DISTRIBUTION SUMMARY ===" -ForegroundColor Cyan
-        $distributionSummary | Format-List
-        
-        Write-Host "`n=== TOP 10 LOCATIONS BY ASSET COUNT ===" -ForegroundColor Cyan
-        $locationDistribution | Select-Object -First 10 |
-            Format-Table LocationName, AssetCount, AssignedUsers, Parent -AutoSize
-        
-        Write-Host "`n=== HIGH-TURNOVER LOCATIONS (Last 30 Days) ===" -ForegroundColor Cyan
-        $locationActivity | Select-Object -First 10 |
-            Format-Table LocationName, ActivityCount, CheckOuts, CheckIns, Transfers -AutoSize
-        
-        # Export if requested
-        if ($ExportPath)
-        {
-            $exportData = $locationDistribution + $locationActivity
-            Export-ToCsv -Data $exportData -FilePath $ExportPath
-        }
-        
-        return @{
-            Summary = $distributionSummary
-            LocationDistribution = $locationDistribution
-            LocationActivity = $locationActivity
-            EmptyLocations = $locationDistribution | Where-Object AssetCount -eq 0
-        }
-    } catch
-    {
-        Write-Error "Failed to retrieve location distribution: $($_.Exception.Message)"
+        return $true
+    } catch {
+        Write-Host "Failed to retrieve location distribution: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
     }
 }
+
+
+
+
 
 #endregion
 

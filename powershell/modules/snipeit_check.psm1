@@ -165,7 +165,7 @@ function Get-AssetByTag {
         return $null
     }
 }
-
+<#
 # LAPTOP/CHARGER FUNCTIONS
 function CheckoutLaptopCharger {
     Clear-Host
@@ -223,6 +223,293 @@ function CheckoutLaptopCharger {
     
     Start-Sleep -Seconds 3
 }
+#>
+
+
+# REPLACE the existing Get-UserInputWithOptions function with this one:
+function Get-UserInputWithOptions {
+    param(
+        [string]$Prompt,
+        [switch]$AllowBack = $true,
+        [switch]$AllowQuit = $true
+    )
+    
+    $options = @()
+    if ($AllowBack) { $options += "'back' to return to main menu" }
+    if ($AllowQuit) { $options += "'quit' to exit" }
+    
+    if ($options.Count -gt 0) {
+        $optionText = " (or " + ($options -join ", ") + ")"
+        $fullPrompt = $Prompt + $optionText + ": "
+    } else {
+        $fullPrompt = $Prompt + ": "
+    }
+    
+    $input = Read-Host $fullPrompt
+    
+    if ($AllowQuit -and ($input.ToLower() -eq "quit" -or $input.ToLower() -eq "exit")) {
+        Write-Host "Exiting application..." -ForegroundColor Yellow
+        exit
+    }
+    
+    if ($AllowBack -and $input.ToLower() -eq "back") {
+        return "BACK"
+    }
+    
+    return $input
+}
+# Helper function to find asset by tag
+function Get-AssetByTag {
+    param([string]$AssetTag)
+    
+    try {
+        $asset = Get-SnipeitAsset -asset_tag $AssetTag
+        if ($asset) {
+            return $asset
+        } else {
+            Write-Host "Asset not found with tag: $AssetTag" -ForegroundColor Red
+            return $null
+        }
+    }
+    catch {
+        Write-Host "Error finding asset: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+# ADD YOUR NEW FUNCTION HERE
+# Helper function to create a charger asset
+function New-ChargerAsset {
+    param(
+        [string]$AssetTag,
+        [int]$ChargerType
+    )
+    
+    try {
+        # Define charger model and type based on selection
+        if ($ChargerType -eq 1) {
+            $modelName = "HP 45W Charger"
+            $modelId = 33  # REPLACE WITH YOUR ACTUAL HP CHARGER MODEL ID
+        } else {
+            $modelName = "Dell 65W Charger"
+            $modelId = 32  # REPLACE WITH YOUR ACTUAL DELL CHARGER MODEL ID
+        }
+        
+        # Create new asset
+        $params = @{
+            asset_tag = $AssetTag
+            model_id = $modelId
+            status_id = 2  # Ready to Deploy status (adjust as needed)
+            name = "$modelName - $AssetTag"
+        }
+        
+        $newAsset = New-SnipeitAsset @params
+        
+        if ($newAsset) {
+            Write-Host "Successfully created new $modelName with asset tag $AssetTag" -ForegroundColor Green
+            return $newAsset
+        } else {
+            Write-Host "Failed to create charger asset" -ForegroundColor Red
+            return $null
+        }
+    }
+    catch {
+        Write-Host "Error creating charger asset: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+
+
+# REPLACE the existing CheckoutLaptopCharger function with these three functions:
+function CheckoutLaptopCharger {
+    Clear-Host
+    Write-Host "=======================================" -ForegroundColor Cyan
+    Write-Host "     LAPTOP & CHARGER CHECK-OUT        " -ForegroundColor Cyan
+    Write-Host "=======================================" -ForegroundColor Cyan
+    
+    # Ask if this is normal or summer checkout
+    $mode = ""
+    while ($mode -ne "normal" -and $mode -ne "summer") {
+        $mode = Get-UserInputWithOptions -Prompt "Enter checkout mode (normal or summer)"
+        if ($mode -eq "BACK") { return }
+        $mode = $mode.ToLower()
+        
+        if ($mode -ne "normal" -and $mode -ne "summer") {
+            Write-Host "Invalid mode. Please enter 'normal' or 'summer'." -ForegroundColor Yellow
+        }
+    }
+    
+    if ($mode -eq "normal") {
+        # Normal checkout process
+        PerformNormalCheckout
+    } else {
+        # Summer checkout process
+        PerformSummerCheckout
+    }
+}
+
+
+function PerformNormalCheckout {
+    # Get user
+    $userInput = Get-UserInputWithOptions -Prompt "Enter username, employee number, or user ID"
+    if ($userInput -eq "BACK") { return }
+    
+    $user = Get-UserId -UserInput $userInput
+    if (-not $user) {
+        Write-Host "Invalid user. Operation cancelled." -ForegroundColor Red
+        Start-Sleep -Seconds 3
+        return
+    }
+    
+    Write-Host "Selected user: $($user.name) (ID: $($user.id))" -ForegroundColor Green
+    
+    # Ask what to check out
+    $checkoutType = ""
+    while ($checkoutType -ne "laptop" -and $checkoutType -ne "charger" -and $checkoutType -ne "both") {
+        $checkoutType = Get-UserInputWithOptions -Prompt "What do you want to check out? (laptop, charger, or both)"
+        if ($checkoutType -eq "BACK") { return }
+        $checkoutType = $checkoutType.ToLower()
+        
+        if ($checkoutType -ne "laptop" -and $checkoutType -ne "charger" -and $checkoutType -ne "both") {
+            Write-Host "Invalid option. Please enter 'laptop', 'charger', or 'both'." -ForegroundColor Yellow
+        }
+    }
+    
+    # Process laptop checkout if requested
+    $laptopAsset = $null
+    if ($checkoutType -eq "laptop" -or $checkoutType -eq "both") {
+        $laptopTag = Get-UserInputWithOptions -Prompt "Enter laptop asset tag"
+        if ($laptopTag -eq "BACK") { return }
+        
+        $laptopAsset = Get-AssetByTag -AssetTag $laptopTag
+        if (-not $laptopAsset) {
+            Write-Host "Laptop not found. Operation cancelled." -ForegroundColor Red
+            Start-Sleep -Seconds 3
+            return
+        }
+    }
+    
+    # Process charger checkout if requested
+    $chargerAsset = $null
+    if ($checkoutType -eq "charger" -or $checkoutType -eq "both") {
+        $chargerTag = Get-UserInputWithOptions -Prompt "Enter charger asset tag"
+        if ($chargerTag -eq "BACK") { return }
+        
+        $chargerAsset = Get-AssetByTag -AssetTag $chargerTag
+        if (-not $chargerAsset) {
+            Write-Host "Charger not found. Operation cancelled." -ForegroundColor Red
+            Start-Sleep -Seconds 3
+            return
+        }
+    }
+    
+    try {
+        # Checkout laptop to user if requested
+        if ($laptopAsset) {
+            Set-SnipeitAssetOwner -id $laptopAsset.id -assigned_id $user.id -checkout_to_type "user"
+            Write-Host "Successfully checked out laptop $($laptopAsset.asset_tag) to $($user.name)" -ForegroundColor Green
+        }
+        
+        # Checkout charger to user if requested
+        if ($chargerAsset) {
+            Set-SnipeitAssetOwner -id $chargerAsset.id -assigned_id $user.id -checkout_to_type "user"
+            Write-Host "Successfully checked out charger $($chargerAsset.asset_tag) to $($user.name)" -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Host "Error checking out asset(s): $($_.Exception.Message)" -ForegroundColor Red
+    }
+    
+    Start-Sleep -Seconds 3
+}
+
+function PerformSummerCheckout {
+    # Loop until user types quit/exit (handled by Get-UserInputWithOptions)
+    while ($true) {
+        Write-Host "`n--- NEW CHECKOUT ---" -ForegroundColor Cyan
+        
+        # Get user for this checkout
+        $userInput = Get-UserInputWithOptions -Prompt "Enter username, employee number, or user ID"
+        if ($userInput -eq "BACK") { return }
+        
+        $user = Get-UserId -UserInput $userInput
+        if (-not $user) {
+            Write-Host "Invalid user. Operation cancelled for this checkout." -ForegroundColor Red
+            Start-Sleep -Seconds 2
+            continue
+        }
+        
+        Write-Host "Selected user: $($user.name) (ID: $($user.id))" -ForegroundColor Green
+        
+        # Get laptop asset tag
+        $laptopTag = Get-UserInputWithOptions -Prompt "Enter laptop asset tag"
+        if ($laptopTag -eq "BACK") { return }
+        
+        $laptopAsset = Get-AssetByTag -AssetTag $laptopTag
+        if (-not $laptopAsset) {
+            Write-Host "Operation cancelled for this checkout." -ForegroundColor Red
+            Start-Sleep -Seconds 2
+            continue
+        }
+        
+        # Get charger asset tag
+        $chargerTag = Get-UserInputWithOptions -Prompt "Enter charger asset tag"
+        if ($chargerTag -eq "BACK") { return }
+        
+        $chargerAsset = Get-AssetByTag -AssetTag $chargerTag
+        
+        # If charger doesn't exist, create it
+        if (-not $chargerAsset) {
+            Write-Host "Charger with tag $chargerTag not found. Creating new charger asset..." -ForegroundColor Yellow
+            
+            $chargerType = 0
+            while ($chargerType -ne 1 -and $chargerType -ne 2) {
+                $chargerTypeInput = Get-UserInputWithOptions -Prompt "Select charger type (1 for 45w HP, 2 for Dell 65w)"
+                if ($chargerTypeInput -eq "BACK") { return }
+                
+                try {
+                    $chargerType = [int]$chargerTypeInput
+                    if ($chargerType -ne 1 -and $chargerType -ne 2) {
+                        Write-Host "Invalid selection. Please enter 1 or 2." -ForegroundColor Yellow
+                    }
+                }
+                catch {
+                    Write-Host "Invalid input. Please enter a number (1 or 2)." -ForegroundColor Yellow
+                }
+            }
+            
+            # Create the charger asset
+            $chargerAsset = New-ChargerAsset -AssetTag $chargerTag -ChargerType $chargerType
+            
+            if (-not $chargerAsset) {
+                Write-Host "Failed to create charger. Operation cancelled for this checkout." -ForegroundColor Red
+                Start-Sleep -Seconds 2
+                continue
+            }
+        }
+        
+        try {
+            # Checkout laptop to user
+            Set-SnipeitAssetOwner -id $laptopAsset.id -assigned_id $user.id -checkout_to_type "user"
+            Write-Host "Successfully checked out laptop $laptopTag to $($user.name)" -ForegroundColor Green
+            
+            # Checkout charger to user
+            Set-SnipeitAssetOwner -id $chargerAsset.id -assigned_id $user.id -checkout_to_type "user" 
+            Write-Host "Successfully checked out charger $chargerTag to $($user.name)" -ForegroundColor Green
+            
+            Write-Host "`nCheckout complete. Starting next checkout..." -ForegroundColor Cyan
+            Write-Host "Type 'quit' or 'exit' at any prompt to finish." -ForegroundColor Yellow
+        }
+        catch {
+            Write-Host "Error checking out laptop/charger: $($_.Exception.Message)" -ForegroundColor Red
+        }
+        
+        Start-Sleep -Seconds 1
+    }
+}
+
+
 
 function CheckinLaptopCharger {
     Clear-Host
