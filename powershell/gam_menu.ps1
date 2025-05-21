@@ -66,10 +66,10 @@ function Show-DeviceMenu
     Write-Host "2. Lock Multiple Mobile Devices (CSV)" -ForegroundColor White
     Write-Host "3. Unlock Single Device" -ForegroundColor White
     Write-Host "4. Unlock Multiple Devices (CSV)" -ForegroundColor White
-    Write-Host "3. Wipe Device" -ForegroundColor White
-    Write-Host "4. Wipe Multiple Devices (CSV)" -ForegroundColor White
-    Write-Host "5. List All Devices" -ForegroundColor White
-    Write-Host "6. Return to Main Menu" -ForegroundColor White
+    Write-Host "5. Wipe Device" -ForegroundColor White
+    Write-Host "6. Wipe Multiple Devices (CSV)" -ForegroundColor White
+    Write-Host "7. List All Devices" -ForegroundColor White
+    Write-Host "8. Return to Main Menu" -ForegroundColor White
     Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host "Enter your choice [1-6]: " -ForegroundColor Yellow -NoNewline
 }
