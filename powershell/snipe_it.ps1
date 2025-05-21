@@ -1,135 +1,87 @@
-# Check if SnipeitPS module is installed and import it
-function Initialize-SnipeIT
+# Function to handle secure credentials storage and retrieval
+function Initialize-SnipeITCredentials
 {
-    if (-not (Get-Module -ListAvailable -Name SnipeitPS))
+    # Define the path for storing encrypted credentials
+    $credentialPath = Join-Path $PSScriptRoot "secure\snipeit_credentials.xml"
+    $credentialDir = Split-Path $credentialPath -Parent
+
+    # Create the secure directory if it doesn't exist
+    if (-not (Test-Path $credentialDir))
     {
-        Write-Host "SnipeitPS module is not installed. Installing..." -ForegroundColor Yellow
         try
         {
-            Install-Module -Name SnipeitPS -Force -Scope CurrentUser
-            Write-Host "SnipeitPS module installed successfully." -ForegroundColor Green
+            New-Item -Path $credentialDir -ItemType Directory -Force | Out-Null
+            Write-Host "Created secure directory for credentials." -ForegroundColor Green
         } catch
         {
-            Write-Host "Failed to install SnipeitPS module. Please install it manually with 'Install-Module -Name SnipeitPS'." -ForegroundColor Red
-            return $false
+            Write-Host "Error creating secure directory: $($_.Exception.Message)" -ForegroundColor Red
+            return $null, $null
         }
     }
-    
-    Import-Module SnipeitPS
-    
-    # Use $PSScriptRoot for better reliability
-    $scriptDir = $PSScriptRoot
-    $moduleDir = Join-Path $scriptDir "modules"
-    
-    # Import the check-in/check-out module
-    $checkModulePath = Join-Path $moduleDir "snipeit_check.psm1"
-    if (Test-Path $checkModulePath)
+
+    # Check if credentials file exists
+    if (Test-Path $credentialPath)
     {
         try
         {
-            Import-Module $checkModulePath -Force -ErrorAction Stop
-            Write-Host "Successfully imported snipeit_check module." -ForegroundColor Green
-        } catch
-        {
-            Write-Host "Error importing snipeit_check module: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "Please check the module file for syntax errors." -ForegroundColor Yellow
-            return $false
-        }
-    } else
-    {
-        Write-Host "Warning: snipeit_check.psm1 module not found in modules directory." -ForegroundColor Yellow
-        Write-Host "Expected path: $checkModulePath" -ForegroundColor Yellow
-        Write-Host "Some functions will not be available." -ForegroundColor Yellow
-    }
-    
-    # Import the temporary and broken device management module
-    $tempBrokenModulePath = Join-Path $moduleDir "snipeit_temp_broken.psm1"
-    if (Test-Path $tempBrokenModulePath)
-    {
-        try
-        {
-            Import-Module $tempBrokenModulePath -Force -ErrorAction Stop
-            Write-Host "Successfully imported snipeit_temp_broken module." -ForegroundColor Green
-        } catch
-        {
-            Write-Host "Error importing snipeit_temp_broken module: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "Please check the module file for syntax errors." -ForegroundColor Yellow
-            return $false
-        }
-    } else
-    {
-        Write-Host "Warning: snipeit_temp_broken.psm1 module not found in modules directory." -ForegroundColor Yellow
-        Write-Host "Expected path: $tempBrokenModulePath" -ForegroundColor Yellow
-        Write-Host "Temp/Broken Device Management will not be available." -ForegroundColor Yellow
-    }
-    
-    # Import the comprehensive reporting module
-    $reportingModulePath = Join-Path $moduleDir "AssetManagementReporting.psm1"
-    if (Test-Path $reportingModulePath)
-    {
-        try
-        {
-            Import-Module $reportingModulePath -Force -ErrorAction Stop
-            Write-Host "Successfully imported AssetManagementReporting module." -ForegroundColor Green
+            # Import existing credentials
+            $credentialObject = Import-Clixml -Path $credentialPath
+            $apiUrl = $credentialObject.ApiUrl
+            $apiKeySecure = $credentialObject.ApiKey | ConvertTo-SecureString
+            $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKeySecure))
             
-            # Initialize the reporting module with current Snipe-IT connection
-            # Extract URL and API key from the existing connection
-            $global:ReportingModuleAvailable = $true
+            Write-Host "Loaded existing Snipe-IT credentials." -ForegroundColor Green
+            return $apiUrl, $apiKey
         } catch
         {
-            Write-Host "Error importing AssetManagementReporting module: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "Advanced reporting features will not be available." -ForegroundColor Yellow
-            $global:ReportingModuleAvailable = $false
+            Write-Host "Error loading credentials: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Will prompt for new credentials." -ForegroundColor Yellow
         }
-    } else
-    {
-        Write-Host "Warning: AssetManagementReporting.psm1 module not found in modules directory." -ForegroundColor Yellow
-        Write-Host "Expected path: $reportingModulePath" -ForegroundColor Yellow
-        Write-Host "Advanced reporting features will not be available." -ForegroundColor Yellow
-        $global:ReportingModuleAvailable = $false
     }
+
+    # If we get here, we need to prompt for credentials
+    Write-Host "No saved Snipe-IT credentials found. Please enter your API details:" -ForegroundColor Yellow
+    $apiUrl = Read-Host "Enter Snipe-IT URL (e.g., https://inventory.company.com)"
+    $apiKeySecure = Read-Host "Enter your Snipe-IT API Key" -AsSecureString
     
-    # Set Snipe-IT API parameters - Replace with your actual values
-    $apiUrl = "https://inv.nomma.lan"
-    $apiKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIzIiwianRpIjoiMGQwZjM2ZjVmMDA0NmZmZDIwODJhM2U5NDNjZDczZmFiYzE3NTA1YzQ1ZjhkNjZkZjJhYTg1NzRlMWVkYzVmOWI5YjhkNzg0MTcyZGQ1ODkiLCJpYXQiOjE3NDc3NjUwOTIuNzgyNTkzLCJuYmYiOjE3NDc3NjUwOTIuNzgyNjA0LCJleHAiOjIyMjExNTA2OTIuNzU4NjMsInN1YiI6IjEiLCJzY29wZXMiOltdfQ.n_niPDYwoYqr591PkHtXuoymcIxzKOaLv4utQtthcK2R94Aoa66vvBj_ZmUTxP7Z4I8RRD-oh2mjWGHWfgKCVPTAQLFnry5XYDWtahD8ZxneIz5iGDNJHCzbmty23XTjcvuR3imMzB8Lh1r9yJJZ_Xf63Yort7APnJG2cohMcdc_W-n3I2lRBunPZaciTq4jhauV5V0eFmkorLes5TmAIpUeCuT7U8kG4mastxmHRl93pmSOdJnfWeOVMYDqYwKAB8Lo1205MvHukzzNEqADVzLvLdyyzbhLqbw5Oo15NRV0OE0u2v7VQvi7JgBkTLBXbyK4qxt56u4KoXhbtoQJdOHM-0wccrYlLHmuAyMsouv01S3zITA_-al5ZMkkccoIqmLTNt3OzTTjFoI0r7q7oaQy7jiCd2KuBHu1htPDjUtpTlyXVQ_a2Y0ia6InfeoO8WRxyRRcIWjbjZiUHEU9k9Ac9t0tioqhqZ-AMUGEdDewrD0h0HFPOvr5xne--3p1cEKT0FTd3jxxgRsYzk0EEG8mYkjeV9BP9mABQjTrUbwjfR12UgXSDuqJ46cJ97ymPqPKMqF3DXtIjKoSWcf-rCUy8CsmvbqEe_zdzXHx5TjK3mL3t4xGoFbI7OHxaXyhEVeu6Y8omTrWyus7IKl2PXhD4jB-NCQIu6KYUxtZYXg"
+    # Convert SecureString to plain text for immediate use
+    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKeySecure)
+    $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
     
+    # Save the credentials
     try
     {
-        Set-SnipeitInfo -URL $apiUrl -APIKey $apiKey
-        Write-Host "Successfully connected to Snipe-IT API." -ForegroundColor Green
-        
-        # Create Reports directory if it doesn't exist
-        $reportsDir = Join-Path $PSScriptRoot "Reports"
-        if (-not (Test-Path $reportsDir))
-        {
-            try
-            {
-                New-Item -Path $reportsDir -ItemType Directory -Force | Out-Null
-                Write-Host "Created Reports directory: $reportsDir" -ForegroundColor Green
-            } catch
-            {
-                Write-Host "Warning: Could not create Reports directory: $($_.Exception.Message)" -ForegroundColor Yellow
-            }
+        $credentialObject = New-Object PSObject -Property @{
+            ApiUrl = $apiUrl
+            ApiKey = $apiKeySecure | ConvertFrom-SecureString
         }
         
-        return $true
+        $credentialObject | Export-Clixml -Path $credentialPath
+        Write-Host "Credentials saved securely." -ForegroundColor Green
     } catch
     {
-        Write-Host "Failed to connect to Snipe-IT API. Please check your connection settings." -ForegroundColor Red
-        return $false
+        Write-Host "Failed to save credentials: $($_.Exception.Message)" -ForegroundColor Red
     }
+
+    return $apiUrl, $apiKey
 }
 
-# Add this new function to initialize the comprehensive reporting module
+# Function to initialize the comprehensive reporting module
 function Initialize-ComprehensiveReporting
 {
     if ($global:ReportingModuleAvailable)
     {
         try
         {
-            # Use the same API URL and key that's already configured
-            $apiUrl = "https://inv.nomma.lan"  # Use your existing URL
-            $apiKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiIzIiwianRpIjoiNzVlOWZkZTliNzc0ZmYzZmUyZmY0NDllNGI2MTJjMTI0MmU5N2EzNzRkZTI3M2E0NzgzYWRiZTU3ZGU0NTc5MGZiZDNmOTAyNGRlOTFhMzUiLCJpYXQiOjE3NDc3NDQ1NTguODU3MDQ5LCJuYmYiOjE3NDc3NDQ1NTguODU3MDU4LCJleHAiOjIyMjExMzAxNTguODI0OTIzLCJzdWIiOiIxIiwic2NvcGVzIjpbXX0.G8tSkcVNp9eLi6QZ5s2kR1QaOrbeYjY40URwhefQTYfQvh6BT8TN28Igas_MwBF4GlDxsRtYsuVgMnHAHUMH0xiiO6dFrtTzaoVjLK31IXQs4MNp8wCE4xOFZehBpf-_xCb7UuD78IgGdPGAErdnOsaWJJq4Ukf8uq1ggl4viwOyVFYNPmo0dHgXFoZiraD6ZPPfEXAvP651M78UZE_Ig4lDY6OljdLUmEtt7strfq0EayMHaK8PTvwcVQR1ogp3BPbUwc2gvD36W2GtCZG9gyFt76ABTtJQdCn8liqNwy-1xDG8NC8BpmjPfxCnpjkvM5gTSndfAlKQ2akU7wsdJCeac3aE0PQ-ATziQOX8wvZwott9N94s56Nw_9ALJDdSjodngyncj93FbAI0ov1nNU3ZyNtLnlvHcWuWLUUm5bgmEixAPZYzlAC6PYF1WIlsgzraAmuIb35IpASIn9qvuQWpECfSl1VE7Hu6CZAqhdcgkw_cKSfFvjhOSpCfSP3nXu1IG0xs0sME96q54Z7rs6j3UrkFH_SiPuio1WarNQGhrV0fJ8fzgdM0tWUvW7mYEFcoM06aWE2_lqeaEA8I_i8NEFqUERmpMrTws_1F23g58JkANI9ZHeo02w5P6oiRMR4IfSgMiFGqkEhhtlPGM0IgirqCBdKEamzqwoEoeSk"  # Use your existing key
+            # Get credentials from secure storage
+            $apiUrl, $apiKey = Initialize-SnipeITCredentials
+            
+            if ([string]::IsNullOrEmpty($apiUrl) -or [string]::IsNullOrEmpty($apiKey))
+            {
+                Write-Host "Failed to get secure credentials for reporting module." -ForegroundColor Red
+                return $false
+            }
             
             Initialize-SnipeITConnection -BaseUrl $apiUrl -ApiToken $apiKey
             Write-Host "Comprehensive reporting module initialized successfully!" -ForegroundColor Green
@@ -143,8 +95,10 @@ function Initialize-ComprehensiveReporting
     return $false
 }
 
+
 # Main Menu Display Function
-function Show-MainMenu {
+function Show-MainMenu
+{
     Clear-Host
     Write-Host "===========================================" -ForegroundColor Blue
     Write-Host "         SNIPE-IT MANAGEMENT SYSTEM       " -ForegroundColor Blue
@@ -160,7 +114,8 @@ function Show-MainMenu {
 }
 
 # Standard Checkout/Checkin Menu
-function Show-CheckoutMenu {
+function Show-CheckoutMenu
+{
     Clear-Host
     Write-Host "===========================================" -ForegroundColor Cyan
     Write-Host "    STANDARD CHECKOUT/CHECKIN OPERATIONS   " -ForegroundColor Cyan
@@ -175,49 +130,67 @@ function Show-CheckoutMenu {
 }
 
 # Process Standard Checkout/Checkin Menu
-function Process-CheckoutMenu {
+function Process-CheckoutMenu
+{
     $continue = $true
     
-    while ($continue) {
+    while ($continue)
+    {
         Show-CheckoutMenu
         $selection = Read-Host
         
         # Check if functions are available before calling them
-        switch ($selection) {
-            "1" { 
-                if (Get-Command -Name "CheckoutLaptopCharger" -ErrorAction SilentlyContinue) {
+        switch ($selection)
+        {
+            "1"
+            { 
+                if (Get-Command -Name "CheckoutLaptopCharger" -ErrorAction SilentlyContinue)
+                {
                     CheckoutLaptopCharger 
-                } else {
+                } else
+                {
                     Write-Host "CheckoutLaptopCharger function not available. Please check snipeit_check.psm1 module." -ForegroundColor Red
                     Start-Sleep -Seconds 3
                 }
             }
-            "2" { 
-                if (Get-Command -Name "CheckinLaptopCharger" -ErrorAction SilentlyContinue) {
+            "2"
+            { 
+                if (Get-Command -Name "CheckinLaptopCharger" -ErrorAction SilentlyContinue)
+                {
                     CheckinLaptopCharger 
-                } else {
+                } else
+                {
                     Write-Host "CheckinLaptopCharger function not available. Please check snipeit_check.psm1 module." -ForegroundColor Red
                     Start-Sleep -Seconds 3
                 }
             }
-            "3" { 
-                if (Get-Command -Name "CheckoutHotspot" -ErrorAction SilentlyContinue) {
+            "3"
+            { 
+                if (Get-Command -Name "CheckoutHotspot" -ErrorAction SilentlyContinue)
+                {
                     CheckoutHotspot 
-                } else {
+                } else
+                {
                     Write-Host "CheckoutHotspot function not available. Please check snipeit_check.psm1 module." -ForegroundColor Red
                     Start-Sleep -Seconds 3
                 }
             }
-            "4" { 
-                if (Get-Command -Name "CheckinHotspot" -ErrorAction SilentlyContinue) {
+            "4"
+            { 
+                if (Get-Command -Name "CheckinHotspot" -ErrorAction SilentlyContinue)
+                {
                     CheckinHotspot 
-                } else {
+                } else
+                {
                     Write-Host "CheckinHotspot function not available. Please check snipeit_check.psm1 module." -ForegroundColor Red
                     Start-Sleep -Seconds 3
                 }
             }
-            "5" { $continue = $false }
-            default { 
+            "5"
+            { $continue = $false 
+            }
+            default
+            { 
                 Write-Host "Invalid selection" -ForegroundColor Red
                 Start-Sleep -Seconds 2 
             }
@@ -226,7 +199,8 @@ function Process-CheckoutMenu {
 }
 
 # Bulk Status Update Function
-function Process-BulkStatusUpdate {
+function Process-BulkStatusUpdate
+{
     Clear-Host
     Write-Host "===========================================" -ForegroundColor Magenta
     Write-Host "         BULK STATUS UPDATE               " -ForegroundColor Magenta
@@ -244,28 +218,35 @@ function Process-BulkStatusUpdate {
     
     $statusId = Read-Host "`nEnter new status ID (1-8)"
     
-    if ($statusId -match '^[1-8]$') {
+    if ($statusId -match '^[1-8]$')
+    {
         $assetTags = Read-Host "Enter asset tags separated by commas (e.g., LAPTOP001,LAPTOP002)"
         
-        if (-not [string]::IsNullOrWhiteSpace($assetTags)) {
+        if (-not [string]::IsNullOrWhiteSpace($assetTags))
+        {
             $tags = $assetTags.Split(',') | ForEach-Object { $_.Trim() }
             
             Write-Host "`nProcessing bulk status update..." -ForegroundColor Yellow
             $successCount = 0
             $failCount = 0
             
-            foreach ($tag in $tags) {
-                try {
+            foreach ($tag in $tags)
+            {
+                try
+                {
                     $asset = Get-SnipeitAsset -asset_tag $tag
-                    if ($asset) {
+                    if ($asset)
+                    {
                         Set-SnipeitAsset -id $asset.id -status_id $statusId
                         Write-Host "✓ Updated $tag" -ForegroundColor Green
                         $successCount++
-                    } else {
+                    } else
+                    {
                         Write-Host "✗ Asset $tag not found" -ForegroundColor Red
                         $failCount++
                     }
-                } catch {
+                } catch
+                {
                     Write-Host "✗ Failed to update $tag : $($_.Exception.Message)" -ForegroundColor Red
                     $failCount++
                 }
@@ -274,10 +255,12 @@ function Process-BulkStatusUpdate {
             Write-Host "`nBulk update completed:" -ForegroundColor White
             Write-Host "✓ Success: $successCount" -ForegroundColor Green
             Write-Host "✗ Failed: $failCount" -ForegroundColor Red
-        } else {
+        } else
+        {
             Write-Host "No asset tags provided." -ForegroundColor Red
         }
-    } else {
+    } else
+    {
         Write-Host "Invalid status ID. Please enter a number between 1-8." -ForegroundColor Red
     }
     
@@ -286,7 +269,8 @@ function Process-BulkStatusUpdate {
 }
 
 # Submit Repair Ticket Function
-function Submit-RepairTicket {
+function Submit-RepairTicket
+{
     Clear-Host
     Write-Host "===========================================" -ForegroundColor Green
     Write-Host "         SUBMIT REPAIR TICKET             " -ForegroundColor Green
@@ -294,16 +278,23 @@ function Submit-RepairTicket {
     
     $assetTag = Read-Host "`nEnter asset tag for repair"
     
-    if (-not [string]::IsNullOrWhiteSpace($assetTag)) {
-        try {
+    if (-not [string]::IsNullOrWhiteSpace($assetTag))
+    {
+        try
+        {
             $asset = Get-SnipeitAsset -asset_tag $assetTag
-            if ($asset) {
+            if ($asset)
+            {
                 Write-Host "Asset: $($asset.name) - $($asset.model.name)" -ForegroundColor White
                 
                 $issue = Read-Host "Describe the issue"
                 $priority = Read-Host "Priority (Low/Medium/High)"
                 $supplierIdInput = Read-Host "Supplier ID (or press Enter for default: 1)"
-                $supplierId = if ([string]::IsNullOrWhiteSpace($supplierIdInput)) { 1 } else { [int]$supplierIdInput }
+                $supplierId = if ([string]::IsNullOrWhiteSpace($supplierIdInput))
+                { 1 
+                } else
+                { [int]$supplierIdInput 
+                }
                 
                 # Create maintenance record
                 $maintenanceParams = @{
@@ -317,7 +308,8 @@ function Submit-RepairTicket {
                 
                 $result = New-SnipeitAssetMaintenance @maintenanceParams
                 
-                if ($result) {
+                if ($result)
+                {
                     # Update asset status to "Out for Repair" (status ID 5)
                     Set-SnipeitAsset -id $asset.id -status_id 5
                     
@@ -327,16 +319,20 @@ function Submit-RepairTicket {
                     Write-Host "- Asset: $assetTag" -ForegroundColor Gray
                     Write-Host "- Priority: $priority" -ForegroundColor Gray
                     Write-Host "- Issue: $issue" -ForegroundColor Gray
-                } else {
+                } else
+                {
                     Write-Host "✗ Failed to submit repair ticket" -ForegroundColor Red
                 }
-            } else {
+            } else
+            {
                 Write-Host "Asset not found: $assetTag" -ForegroundColor Red
             }
-        } catch {
+        } catch
+        {
             Write-Host "Error submitting repair ticket: $($_.Exception.Message)" -ForegroundColor Red
         }
-    } else {
+    } else
+    {
         Write-Host "Asset tag cannot be empty." -ForegroundColor Red
     }
     
@@ -640,30 +636,37 @@ function Run-LocationReport
 # Basic reporting functions
 
 # Asset Status Summary
-function Show-AssetStatusSummary {
+function Show-AssetStatusSummary
+{
     Write-Host "`nGenerating asset status summary..." -ForegroundColor Yellow
     
-    try {
+    try
+    {
         $allAssets = Get-SnipeitAsset
         $statusCounts = @{}
         
-        foreach ($asset in $allAssets) {
+        foreach ($asset in $allAssets)
+        {
             $status = $asset.status_label.name
-            if ($statusCounts.ContainsKey($status)) {
+            if ($statusCounts.ContainsKey($status))
+            {
                 $statusCounts[$status]++
-            } else {
+            } else
+            {
                 $statusCounts[$status] = 1
             }
         }
         
         Write-Host "`nAsset Status Summary:" -ForegroundColor White
         Write-Host "=" * 50 -ForegroundColor Gray
-        foreach ($status in $statusCounts.Keys | Sort-Object) {
+        foreach ($status in $statusCounts.Keys | Sort-Object)
+        {
             Write-Host "$status : $($statusCounts[$status])" -ForegroundColor Cyan
         }
         Write-Host "=" * 50 -ForegroundColor Gray
         Write-Host "Total Assets: $($allAssets.Count)" -ForegroundColor Green
-    } catch {
+    } catch
+    {
         Write-Host "Error generating status summary: $($_.Exception.Message)" -ForegroundColor Red
     }
     
@@ -673,16 +676,20 @@ function Show-AssetStatusSummary {
 }
 
 # Today's Checkouts
-function Show-TodaysCheckouts {
+function Show-TodaysCheckouts
+{
     Write-Host "`nRetrieving today's checkouts..." -ForegroundColor Yellow
     
-    try {
+    try
+    {
         $today = Get-Date -Format "yyyy-MM-dd"
         $allAssets = Get-SnipeitAsset -status "Deployed"
         $todaysCheckouts = @()
         
-        foreach ($asset in $allAssets) {
-            if ($asset.last_checkout -like "$today*") {
+        foreach ($asset in $allAssets)
+        {
+            if ($asset.last_checkout -like "$today*")
+            {
                 $todaysCheckouts += $asset
             }
         }
@@ -690,16 +697,20 @@ function Show-TodaysCheckouts {
         Write-Host "`nToday's Checkouts ($today):" -ForegroundColor White
         Write-Host "=" * 80 -ForegroundColor Gray
         
-        if ($todaysCheckouts.Count -gt 0) {
-            foreach ($checkout in $todaysCheckouts) {
+        if ($todaysCheckouts.Count -gt 0)
+        {
+            foreach ($checkout in $todaysCheckouts)
+            {
                 Write-Host "Asset: $($checkout.asset_tag) | User: $($checkout.assigned_to.name) | Time: $($checkout.last_checkout)" -ForegroundColor Cyan
             }
             Write-Host "=" * 80 -ForegroundColor Gray
             Write-Host "Total checkouts today: $($todaysCheckouts.Count)" -ForegroundColor Green
-        } else {
+        } else
+        {
             Write-Host "No checkouts found for today." -ForegroundColor Yellow
         }
-    } catch {
+    } catch
+    {
         Write-Host "Error retrieving today's checkouts: $($_.Exception.Message)" -ForegroundColor Red
     }
     
@@ -709,18 +720,23 @@ function Show-TodaysCheckouts {
 }
 
 # Overdue Returns
-function Show-OverdueReturns {
+function Show-OverdueReturns
+{
     Write-Host "`nChecking for overdue returns..." -ForegroundColor Yellow
     
-    try {
+    try
+    {
         $today = Get-Date
         $allAssets = Get-SnipeitAsset -status "Deployed"
         $overdueAssets = @()
         
-        foreach ($asset in $allAssets) {
-            if ($asset.expected_checkin) {
+        foreach ($asset in $allAssets)
+        {
+            if ($asset.expected_checkin)
+            {
                 $expectedDate = [DateTime]::Parse($asset.expected_checkin)
-                if ($expectedDate -lt $today) {
+                if ($expectedDate -lt $today)
+                {
                     $overdueAssets += $asset
                 }
             }
@@ -729,17 +745,21 @@ function Show-OverdueReturns {
         Write-Host "`nOverdue Returns:" -ForegroundColor White
         Write-Host "=" * 100 -ForegroundColor Gray
         
-        if ($overdueAssets.Count -gt 0) {
-            foreach ($overdue in $overdueAssets) {
+        if ($overdueAssets.Count -gt 0)
+        {
+            foreach ($overdue in $overdueAssets)
+            {
                 $daysOverdue = ([DateTime]::Now - [DateTime]::Parse($overdue.expected_checkin)).Days
                 Write-Host "Asset: $($overdue.asset_tag) | User: $($overdue.assigned_to.name) | Expected: $($overdue.expected_checkin) | Days Overdue: $daysOverdue" -ForegroundColor Red
             }
             Write-Host "=" * 100 -ForegroundColor Gray
             Write-Host "Total overdue assets: $($overdueAssets.Count)" -ForegroundColor Red
-        } else {
+        } else
+        {
             Write-Host "No overdue returns found." -ForegroundColor Green
         }
-    } catch {
+    } catch
+    {
         Write-Host "Error checking overdue returns: $($_.Exception.Message)" -ForegroundColor Red
     }
     
@@ -749,27 +769,33 @@ function Show-OverdueReturns {
 }
 
 # Maintenance Records
-function Show-MaintenanceRecords {
+function Show-MaintenanceRecords
+{
     Write-Host "`nRetrieving maintenance records..." -ForegroundColor Yellow
     
-    try {
+    try
+    {
         $maintenanceRecords = Get-SnipeitAssetMaintenance
         
         Write-Host "`nRecent Maintenance Records:" -ForegroundColor White
         Write-Host "=" * 120 -ForegroundColor Gray
         
-        if ($maintenanceRecords -and $maintenanceRecords.Count -gt 0) {
+        if ($maintenanceRecords -and $maintenanceRecords.Count -gt 0)
+        {
             $recentRecords = $maintenanceRecords | Sort-Object start_date -Descending | Select-Object -First 10
             
-            foreach ($record in $recentRecords) {
+            foreach ($record in $recentRecords)
+            {
                 Write-Host "Asset: $($record.asset.asset_tag) | Type: $($record.asset_maintenance_type) | Start: $($record.start_date) | Title: $($record.title)" -ForegroundColor Cyan
             }
             Write-Host "=" * 120 -ForegroundColor Gray
             Write-Host "Showing 10 most recent records. Total records: $($maintenanceRecords.Count)" -ForegroundColor Green
-        } else {
+        } else
+        {
             Write-Host "No maintenance records found." -ForegroundColor Yellow
         }
-    } catch {
+    } catch
+    {
         Write-Host "Error retrieving maintenance records: $($_.Exception.Message)" -ForegroundColor Red
     }
     
@@ -779,33 +805,49 @@ function Show-MaintenanceRecords {
 }
 
 # Main Application Loop
-function Start-MainApplication {
+function Start-MainApplication
+{
     $continue = $true
     
-    while ($continue) {
+    while ($continue)
+    {
         Show-MainMenu
         $selection = Read-Host
         
-        switch ($selection) {
-            "1" { Process-CheckoutMenu }
-            "2" { 
-                if (Get-Command -Name "Process-TempBrokenMenu" -ErrorAction SilentlyContinue) {
+        switch ($selection)
+        {
+            "1"
+            { Process-CheckoutMenu 
+            }
+            "2"
+            { 
+                if (Get-Command -Name "Process-TempBrokenMenu" -ErrorAction SilentlyContinue)
+                {
                     Process-TempBrokenMenu 
-                } else {
+                } else
+                {
                     Write-Host "Process-TempBrokenMenu function not available. Please check snipeit_temp_broken.psm1 module." -ForegroundColor Red
                     Write-Host "Available functions from imported modules:" -ForegroundColor Yellow
                     Get-Command -Module snipeit_temp_broken -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  - $($_.Name)" -ForegroundColor Cyan }
                     Start-Sleep -Seconds 5
                 }
             }
-            "3" { Process-BulkStatusUpdate }
-            "4" { Submit-RepairTicket }
-            "5" { Show-ReportsMenu }
-            "6" { 
+            "3"
+            { Process-BulkStatusUpdate 
+            }
+            "4"
+            { Submit-RepairTicket 
+            }
+            "5"
+            { Show-ReportsMenu 
+            }
+            "6"
+            { 
                 Write-Host "Exiting Snipe-IT Management System..." -ForegroundColor Yellow
                 $continue = $false 
             }
-            default { 
+            default
+            { 
                 Write-Host "Invalid selection. Please enter a number between 1-6." -ForegroundColor Red
                 Start-Sleep -Seconds 2 
             }
@@ -820,7 +862,7 @@ Write-Host "===========================================" -ForegroundColor Blue
 
 # Initialize the Snipe-IT connection and modules
 Write-Host "Initializing Snipe-IT system..." -ForegroundColor Yellow
-$initResult = Initialize-SnipeIT
+$initResult = Initialize-SnipeITCredentials
 
 if ($initResult)
 {
