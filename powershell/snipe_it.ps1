@@ -25,7 +25,7 @@ function Initialize-SnipeITCredentials
         try
         {
             # Import existing credentials
-            $credentialObject = Import-Clixml -Path $credentialPath
+
             $apiUrl = $credentialObject.ApiUrl
             $apiKeySecure = $credentialObject.ApiKey | ConvertTo-SecureString
             $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
@@ -96,6 +96,130 @@ function Initialize-ComprehensiveReporting
 }
 
 
+
+
+# Import required modules from the local modules directory
+$modulesPath = Join-Path $PSScriptRoot "modules"
+$checkModule = Join-Path $modulesPath "snipeit_check.psm1"
+$tempBrokenModule = Join-Path $modulesPath "snipeit_temp_broken.psm1"
+Write-Host "Loading modules from: $modulesPath" -ForegroundColor Yellow
+
+# Import the check-in/check-out module
+if (Test-Path $checkModule) {
+    Import-Module $checkModule -Force
+    Write-Host "Successfully imported snipeit_check module." -ForegroundColor Green
+    
+    # Verify functions are available
+    if (Get-Command -Name "CheckoutLaptopCharger" -ErrorAction SilentlyContinue) {
+        Write-Host "Check-in/Check-out functions successfully loaded." -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: Module imported but functions not available!" -ForegroundColor Red
+    }
+} else {
+    Write-Host "ERROR: Could not find snipeit_check.psm1 at $checkModule" -ForegroundColor Red
+}
+
+# Import the temp/broken devices module
+if (Test-Path $tempBrokenModule) {
+    Import-Module $tempBrokenModule -Force
+    Write-Host "Successfully imported snipeit_temp_broken module." -ForegroundColor Green
+} else {
+    Write-Host "WARNING: Could not find snipeit_temp_broken.psm1 at $tempBrokenModule" -ForegroundColor Yellow
+}
+
+# Function to get user ID from various input types
+function Get-UserId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$UserInput
+    )
+    
+    Write-Host "Looking up user: $UserInput..." -ForegroundColor Yellow
+    
+    try {
+        # First try exact username match
+        $user = Get-SnipeitUser -username $UserInput
+        if ($user) {
+            return $user
+        }
+        
+        # Try by employee number
+        $user = Get-SnipeitUser -employee_num $UserInput
+        if ($user) {
+            return $user
+        }
+        
+        # Try by user ID if it's a number
+        if ($UserInput -match '^\d+$') {
+            $user = Get-SnipeitUser -id $UserInput
+            if ($user) {
+                return $user
+            }
+        }
+        
+        # Try partial name search as last resort
+        $allUsers = Get-SnipeitUser -all
+        $matchedUsers = $allUsers | Where-Object { 
+            $_.username -like "*$UserInput*" -or 
+            $_.name -like "*$UserInput*" -or 
+            $_.email -like "*$UserInput*"
+        }
+        
+        if ($matchedUsers -and $matchedUsers.Count -gt 0) {
+            # If multiple matches, let user select
+            if ($matchedUsers.Count -gt 1) {
+                Write-Host "Multiple users found. Please select one:" -ForegroundColor Yellow
+                for ($i = 0; $i -lt $matchedUsers.Count; $i++) {
+                    Write-Host "$($i+1). $($matchedUsers[$i].name) ($($matchedUsers[$i].username))" -ForegroundColor Cyan
+                }
+                
+                $selection = Read-Host "Enter selection number"
+                if ($selection -match '^\d+$' -and [int]$selection -ge 1 -and [int]$selection -le $matchedUsers.Count) {
+                    return $matchedUsers[[int]$selection - 1]
+                } else {
+                    Write-Host "Invalid selection." -ForegroundColor Red
+                    return $null
+                }
+            } else {
+                # Single match found
+                return $matchedUsers[0]
+            }
+        }
+        
+        # No user found
+        Write-Host "No user found matching '$UserInput'." -ForegroundColor Red
+        return $null
+    } catch {
+        Write-Host "Error looking up user: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+# Function to get asset by tag
+function Get-AssetByTag {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AssetTag
+    )
+    
+    Write-Host "Looking up asset with tag: $AssetTag..." -ForegroundColor Yellow
+    
+    try {
+        $asset = Get-SnipeitAsset -asset_tag $AssetTag
+        
+        if ($asset) {
+            Write-Host "Found: $($asset.name)" -ForegroundColor Green
+            return $asset
+        } else {
+            Write-Host "No asset found with tag '$AssetTag'." -ForegroundColor Red
+            return $null
+        }
+    } catch {
+        Write-Host "Error looking up asset: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
 # Main Menu Display Function
 function Show-MainMenu
 {
@@ -127,6 +251,194 @@ function Show-CheckoutMenu
     Write-Host "5. Back to Main Menu"
     Write-Host "===========================================" -ForegroundColor Cyan
     Write-Host "Enter your choice [1-5]: " -ForegroundColor Yellow -NoNewline
+}
+
+
+# LAPTOP/CHARGER FUNCTIONS
+function PerformNormalCheckout {
+    # Get user
+    $userInput = Get-UserInputWithOptions -Prompt "Enter username, employee number, or user ID"
+    if ($userInput -eq "BACK") { return }
+    
+    $user = Get-UserId -UserInput $userInput
+    if (-not $user) {
+        Write-Host "Invalid user. Operation cancelled." -ForegroundColor Red
+        Start-Sleep -Seconds 3
+        return
+    }
+    
+    Write-Host "Selected user: $($user.name) (ID: $($user.id))" -ForegroundColor Green
+    
+    # Ask what to check out
+    $checkoutType = ""
+    while ($checkoutType -ne "laptop" -and $checkoutType -ne "charger" -and $checkoutType -ne "both") {
+        $checkoutType = Get-UserInputWithOptions -Prompt "What do you want to check out? (laptop, charger, or both)"
+        if ($checkoutType -eq "BACK") { return }
+        $checkoutType = $checkoutType.ToLower()
+        
+        if ($checkoutType -ne "laptop" -and $checkoutType -ne "charger" -and $checkoutType -ne "both") {
+            Write-Host "Invalid option. Please enter 'laptop', 'charger', or 'both'." -ForegroundColor Yellow
+        }
+    }
+    
+    # Process laptop checkout if requested
+    $laptopAsset = $null
+    if ($checkoutType -eq "laptop" -or $checkoutType -eq "both") {
+        $laptopTag = Get-UserInputWithOptions -Prompt "Enter laptop asset tag"
+        if ($laptopTag -eq "BACK") { return }
+        
+        $laptopAsset = Get-AssetByTag -AssetTag $laptopTag
+        if (-not $laptopAsset) {
+            Write-Host "Laptop not found. Operation cancelled." -ForegroundColor Red
+            Start-Sleep -Seconds 3
+            return
+        }
+    }
+    
+    # Process charger checkout if requested
+    $chargerAsset = $null
+    if ($checkoutType -eq "charger" -or $checkoutType -eq "both") {
+        $chargerTag = Get-UserInputWithOptions -Prompt "Enter charger asset tag"
+        if ($chargerTag -eq "BACK") { return }
+        
+        $chargerAsset = Get-AssetByTag -AssetTag $chargerTag
+        if (-not $chargerAsset) {
+            Write-Host "Charger not found. Operation cancelled." -ForegroundColor Red
+            Start-Sleep -Seconds 3
+            return
+        }
+    }
+    
+    try {
+        # Checkout laptop to user if requested
+        if ($laptopAsset) {
+            Set-SnipeitAssetOwner -id $laptopAsset.id -assigned_id $user.id -checkout_to_type "user"
+            Write-Host "Successfully checked out laptop $($laptopAsset.asset_tag) to $($user.name)" -ForegroundColor Green
+        }
+        
+        # Checkout charger to user if requested
+        if ($chargerAsset) {
+            Set-SnipeitAssetOwner -id $chargerAsset.id -assigned_id $user.id -checkout_to_type "user"
+            Write-Host "Successfully checked out charger $($chargerAsset.asset_tag) to $($user.name)" -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Host "Error checking out asset(s): $($_.Exception.Message)" -ForegroundColor Red
+    }
+    
+    Start-Sleep -Seconds 3
+}
+
+function PerformSummerCheckout {
+    # Loop until user types quit/exit (handled by Get-UserInputWithOptions)
+    while ($true) {
+        Write-Host "`n--- NEW CHECKOUT ---" -ForegroundColor Cyan
+        
+        # Get user for this checkout
+        $userInput = Get-UserInputWithOptions -Prompt "Enter username, employee number, or user ID"
+        if ($userInput -eq "BACK") { return }
+        
+        $user = Get-UserId -UserInput $userInput
+        if (-not $user) {
+            Write-Host "Invalid user. Operation cancelled for this checkout." -ForegroundColor Red
+            Start-Sleep -Seconds 2
+            continue
+        }
+        
+        Write-Host "Selected user: $($user.name) (ID: $($user.id))" -ForegroundColor Green
+        
+        # Get laptop asset tag
+        $laptopTag = Get-UserInputWithOptions -Prompt "Enter laptop asset tag"
+        if ($laptopTag -eq "BACK") { return }
+        
+        $laptopAsset = Get-AssetByTag -AssetTag $laptopTag
+        if (-not $laptopAsset) {
+            Write-Host "Operation cancelled for this checkout." -ForegroundColor Red
+            Start-Sleep -Seconds 2
+            continue
+        }
+        
+        # Get charger asset tag
+        $chargerTag = Get-UserInputWithOptions -Prompt "Enter charger asset tag"
+        if ($chargerTag -eq "BACK") { return }
+        
+        $chargerAsset = Get-AssetByTag -AssetTag $chargerTag
+        
+        # If charger doesn't exist, create it
+        if (-not $chargerAsset) {
+            Write-Host "Charger with tag $chargerTag not found. Creating new charger asset..." -ForegroundColor Yellow
+            
+            $chargerType = 0
+            while ($chargerType -ne 1 -and $chargerType -ne 2) {
+                $chargerTypeInput = Get-UserInputWithOptions -Prompt "Select charger type (1 for 45w HP, 2 for Dell 65w)"
+                if ($chargerTypeInput -eq "BACK") { return }
+                
+                try {
+                    $chargerType = [int]$chargerTypeInput
+                    if ($chargerType -ne 1 -and $chargerType -ne 2) {
+                        Write-Host "Invalid selection. Please enter 1 or 2." -ForegroundColor Yellow
+                    }
+                }
+                catch {
+                    Write-Host "Invalid input. Please enter a number (1 or 2)." -ForegroundColor Yellow
+                }
+            }
+            
+            # Create the charger asset
+            $chargerAsset = New-ChargerAsset -AssetTag $chargerTag -ChargerType $chargerType
+            
+            if (-not $chargerAsset) {
+                Write-Host "Failed to create charger. Operation cancelled for this checkout." -ForegroundColor Red
+                Start-Sleep -Seconds 2
+                continue
+            }
+        }
+        
+        try {
+            # Checkout laptop to user
+            Set-SnipeitAssetOwner -id $laptopAsset.id -assigned_id $user.id -checkout_to_type "user"
+            Write-Host "Successfully checked out laptop $laptopTag to $($user.name)" -ForegroundColor Green
+            
+            # Checkout charger to user
+            Set-SnipeitAssetOwner -id $chargerAsset.id -assigned_id $user.id -checkout_to_type "user" 
+            Write-Host "Successfully checked out charger $chargerTag to $($user.name)" -ForegroundColor Green
+            
+            Write-Host "`nCheckout complete. Starting next checkout..." -ForegroundColor Cyan
+            Write-Host "Type 'quit' or 'exit' at any prompt to finish." -ForegroundColor Yellow
+        }
+        catch {
+            Write-Host "Error checking out laptop/charger: $($_.Exception.Message)" -ForegroundColor Red
+        }
+        
+        Start-Sleep -Seconds 1
+    }
+}
+
+function CheckoutLaptopCharger {
+    Clear-Host
+    Write-Host "=======================================" -ForegroundColor Cyan
+    Write-Host "     LAPTOP & CHARGER CHECK-OUT        " -ForegroundColor Cyan
+    Write-Host "=======================================" -ForegroundColor Cyan
+    
+    # Ask if this is normal or summer checkout
+    $mode = ""
+    while ($mode -ne "normal" -and $mode -ne "summer") {
+        $mode = Get-UserInputWithOptions -Prompt "Enter checkout mode (normal or summer)"
+        if ($mode -eq "BACK") { return }
+        $mode = $mode.ToLower()
+        
+        if ($mode -ne "normal" -and $mode -ne "summer") {
+            Write-Host "Invalid mode. Please enter 'normal' or 'summer'." -ForegroundColor Yellow
+        }
+    }
+    
+    if ($mode -eq "normal") {
+        # Normal checkout process
+        PerformNormalCheckout
+    } else {
+        # Summer checkout process
+        PerformSummerCheckout
+    }
 }
 
 # Process Standard Checkout/Checkin Menu
@@ -673,6 +985,39 @@ function Show-AssetStatusSummary
     Write-Host "`nPress any key to return to reports menu..." -ForegroundColor Yellow
     [void][System.Console]::ReadKey($true)
     Show-ReportsMenu
+}
+
+# Helper function for user input with options
+function Get-UserInputWithOptions {
+    param(
+        [string]$Prompt,
+        [switch]$AllowBack = $true,
+        [switch]$AllowQuit = $true
+    )
+    
+    $options = @()
+    if ($AllowBack) { $options += "'back' to return to main menu" }
+    if ($AllowQuit) { $options += "'quit' to exit" }
+    
+    if ($options.Count -gt 0) {
+        $optionText = " (or " + ($options -join ", ") + ")"
+        $fullPrompt = $Prompt + $optionText + ": "
+    } else {
+        $fullPrompt = $Prompt + ": "
+    }
+    
+    $input = Read-Host $fullPrompt
+    
+    if ($AllowQuit -and ($input.ToLower() -eq "quit" -or $input.ToLower() -eq "exit")) {
+        Write-Host "Exiting application..." -ForegroundColor Yellow
+        exit
+    }
+    
+    if ($AllowBack -and $input.ToLower() -eq "back") {
+        return "BACK"
+    }
+    
+    return $input
 }
 
 # Today's Checkouts

@@ -213,7 +213,7 @@ function Unlock-SingleChromebook
     Write-Host "Unlocking Chromebook with asset ID $assetID..." -ForegroundColor Yellow
     
     # The command to unlock a Chrome device by asset ID
-    & gam update cros query "asset_id:$assetID" action unlock
+    & gam update cros query "asset_id:$assetID" action reenable
     
     Write-Host "Unlock command has been sent to the device" -ForegroundColor Green
     Read-Host "Press Enter to continue..."
