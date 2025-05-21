@@ -1,70 +1,44 @@
-# Function to handle secure credentials storage and retrieval
-function Initialize-SnipeITCredentials
-{
-    # Define the path for storing encrypted credentials
-    $credentialPath = Join-Path $PSScriptRoot "secure\snipeit_credentials.xml"
-    $credentialDir = Split-Path $credentialPath -Parent
-
-    # Create the secure directory if it doesn't exist
-    if (-not (Test-Path $credentialDir))
-    {
-        try
-        {
-            New-Item -Path $credentialDir -ItemType Directory -Force | Out-Null
-            Write-Host "Created secure directory for credentials." -ForegroundColor Green
-        } catch
-        {
-            Write-Host "Error creating secure directory: $($_.Exception.Message)" -ForegroundColor Red
-            return $null, $null
-        }
-    }
-
-    # Check if credentials file exists
-    if (Test-Path $credentialPath)
-    {
-        try
-        {
-            # Import existing credentials
-
-            $apiUrl = $credentialObject.ApiUrl
-            $apiKeySecure = $credentialObject.ApiKey | ConvertTo-SecureString
-            $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKeySecure))
-            
-            Write-Host "Loaded existing Snipe-IT credentials." -ForegroundColor Green
-            return $apiUrl, $apiKey
-        } catch
-        {
-            Write-Host "Error loading credentials: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "Will prompt for new credentials." -ForegroundColor Yellow
-        }
-    }
-
-    # If we get here, we need to prompt for credentials
-    Write-Host "No saved Snipe-IT credentials found. Please enter your API details:" -ForegroundColor Yellow
-    $apiUrl = Read-Host "Enter Snipe-IT URL (e.g., https://inventory.company.com)"
-    $apiKeySecure = Read-Host "Enter your Snipe-IT API Key" -AsSecureString
-    
-    # Convert SecureString to plain text for immediate use
-    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKeySecure)
-    $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-    
-    # Save the credentials
-    try
-    {
-        $credentialObject = New-Object PSObject -Property @{
-            ApiUrl = $apiUrl
-            ApiKey = $apiKeySecure | ConvertFrom-SecureString
-        }
+function Initialize-SnipeITCredentials {
+    param(
+        [Parameter(Mandatory = $false)]
+        [switch]$UseSavedCredentials,
         
-        $credentialObject | Export-Clixml -Path $credentialPath
-        Write-Host "Credentials saved securely." -ForegroundColor Green
-    } catch
-    {
-        Write-Host "Failed to save credentials: $($_.Exception.Message)" -ForegroundColor Red
+        [Parameter(Mandatory = $false)]
+        [string]$CredentialPath = ".\snipecred.xml"
+    )
+    
+    if ($UseSavedCredentials -and (Test-Path $CredentialPath)) {
+        # Use saved credentials from XML file
+        Write-Host "Using saved credentials from $CredentialPath" -ForegroundColor Green
+        $siteCred = Import-CliXml $CredentialPath
+        return $null, $null, $siteCred
+    } 
+    else {
+        # Use hardcoded credentials as fallback
+        $global:SnipeItApiUrl = "https://inv.nomma.lan"  # Replace with your actual Snipe-IT URL
+        $global:SnipeItApiKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJh..."  # Your API key here
+        $global:SnipeItCredentialPath = $null
+        
+        Write-Host "Using hardcoded Snipe-IT credentials." -ForegroundColor Yellow
+        
+        return $global:SnipeItApiUrl, $global:SnipeItApiKey, $null
     }
+}
 
-    return $apiUrl, $apiKey
+function New-SnipeITCredential {
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$Path = ".\snipecred.xml"
+    )
+    
+    Write-Host "Creating new Snipe-IT credentials..." -ForegroundColor Yellow
+    Write-Host "Enter Snipe-IT URL as username and API key as password" -ForegroundColor Cyan
+    
+    $credential = Get-Credential -Message "Use URL as username and API key as password"
+    $credential | Export-CliXml $Path
+    
+    Write-Host "Credentials saved to $Path" -ForegroundColor Green
+    return $Path
 }
 
 # Function to initialize the comprehensive reporting module
@@ -195,31 +169,6 @@ function Get-UserId {
     }
 }
 
-# Function to get asset by tag
-function Get-AssetByTag {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$AssetTag
-    )
-    
-    Write-Host "Looking up asset with tag: $AssetTag..." -ForegroundColor Yellow
-    
-    try {
-        $asset = Get-SnipeitAsset -asset_tag $AssetTag
-        
-        if ($asset) {
-            Write-Host "Found: $($asset.name)" -ForegroundColor Green
-            return $asset
-        } else {
-            Write-Host "No asset found with tag '$AssetTag'." -ForegroundColor Red
-            return $null
-        }
-    } catch {
-        Write-Host "Error looking up asset: $($_.Exception.Message)" -ForegroundColor Red
-        return $null
-    }
-}
-
 # Main Menu Display Function
 function Show-MainMenu
 {
@@ -251,194 +200,6 @@ function Show-CheckoutMenu
     Write-Host "5. Back to Main Menu"
     Write-Host "===========================================" -ForegroundColor Cyan
     Write-Host "Enter your choice [1-5]: " -ForegroundColor Yellow -NoNewline
-}
-
-
-# LAPTOP/CHARGER FUNCTIONS
-function PerformNormalCheckout {
-    # Get user
-    $userInput = Get-UserInputWithOptions -Prompt "Enter username, employee number, or user ID"
-    if ($userInput -eq "BACK") { return }
-    
-    $user = Get-UserId -UserInput $userInput
-    if (-not $user) {
-        Write-Host "Invalid user. Operation cancelled." -ForegroundColor Red
-        Start-Sleep -Seconds 3
-        return
-    }
-    
-    Write-Host "Selected user: $($user.name) (ID: $($user.id))" -ForegroundColor Green
-    
-    # Ask what to check out
-    $checkoutType = ""
-    while ($checkoutType -ne "laptop" -and $checkoutType -ne "charger" -and $checkoutType -ne "both") {
-        $checkoutType = Get-UserInputWithOptions -Prompt "What do you want to check out? (laptop, charger, or both)"
-        if ($checkoutType -eq "BACK") { return }
-        $checkoutType = $checkoutType.ToLower()
-        
-        if ($checkoutType -ne "laptop" -and $checkoutType -ne "charger" -and $checkoutType -ne "both") {
-            Write-Host "Invalid option. Please enter 'laptop', 'charger', or 'both'." -ForegroundColor Yellow
-        }
-    }
-    
-    # Process laptop checkout if requested
-    $laptopAsset = $null
-    if ($checkoutType -eq "laptop" -or $checkoutType -eq "both") {
-        $laptopTag = Get-UserInputWithOptions -Prompt "Enter laptop asset tag"
-        if ($laptopTag -eq "BACK") { return }
-        
-        $laptopAsset = Get-AssetByTag -AssetTag $laptopTag
-        if (-not $laptopAsset) {
-            Write-Host "Laptop not found. Operation cancelled." -ForegroundColor Red
-            Start-Sleep -Seconds 3
-            return
-        }
-    }
-    
-    # Process charger checkout if requested
-    $chargerAsset = $null
-    if ($checkoutType -eq "charger" -or $checkoutType -eq "both") {
-        $chargerTag = Get-UserInputWithOptions -Prompt "Enter charger asset tag"
-        if ($chargerTag -eq "BACK") { return }
-        
-        $chargerAsset = Get-AssetByTag -AssetTag $chargerTag
-        if (-not $chargerAsset) {
-            Write-Host "Charger not found. Operation cancelled." -ForegroundColor Red
-            Start-Sleep -Seconds 3
-            return
-        }
-    }
-    
-    try {
-        # Checkout laptop to user if requested
-        if ($laptopAsset) {
-            Set-SnipeitAssetOwner -id $laptopAsset.id -assigned_id $user.id -checkout_to_type "user"
-            Write-Host "Successfully checked out laptop $($laptopAsset.asset_tag) to $($user.name)" -ForegroundColor Green
-        }
-        
-        # Checkout charger to user if requested
-        if ($chargerAsset) {
-            Set-SnipeitAssetOwner -id $chargerAsset.id -assigned_id $user.id -checkout_to_type "user"
-            Write-Host "Successfully checked out charger $($chargerAsset.asset_tag) to $($user.name)" -ForegroundColor Green
-        }
-    }
-    catch {
-        Write-Host "Error checking out asset(s): $($_.Exception.Message)" -ForegroundColor Red
-    }
-    
-    Start-Sleep -Seconds 3
-}
-
-function PerformSummerCheckout {
-    # Loop until user types quit/exit (handled by Get-UserInputWithOptions)
-    while ($true) {
-        Write-Host "`n--- NEW CHECKOUT ---" -ForegroundColor Cyan
-        
-        # Get user for this checkout
-        $userInput = Get-UserInputWithOptions -Prompt "Enter username, employee number, or user ID"
-        if ($userInput -eq "BACK") { return }
-        
-        $user = Get-UserId -UserInput $userInput
-        if (-not $user) {
-            Write-Host "Invalid user. Operation cancelled for this checkout." -ForegroundColor Red
-            Start-Sleep -Seconds 2
-            continue
-        }
-        
-        Write-Host "Selected user: $($user.name) (ID: $($user.id))" -ForegroundColor Green
-        
-        # Get laptop asset tag
-        $laptopTag = Get-UserInputWithOptions -Prompt "Enter laptop asset tag"
-        if ($laptopTag -eq "BACK") { return }
-        
-        $laptopAsset = Get-AssetByTag -AssetTag $laptopTag
-        if (-not $laptopAsset) {
-            Write-Host "Operation cancelled for this checkout." -ForegroundColor Red
-            Start-Sleep -Seconds 2
-            continue
-        }
-        
-        # Get charger asset tag
-        $chargerTag = Get-UserInputWithOptions -Prompt "Enter charger asset tag"
-        if ($chargerTag -eq "BACK") { return }
-        
-        $chargerAsset = Get-AssetByTag -AssetTag $chargerTag
-        
-        # If charger doesn't exist, create it
-        if (-not $chargerAsset) {
-            Write-Host "Charger with tag $chargerTag not found. Creating new charger asset..." -ForegroundColor Yellow
-            
-            $chargerType = 0
-            while ($chargerType -ne 1 -and $chargerType -ne 2) {
-                $chargerTypeInput = Get-UserInputWithOptions -Prompt "Select charger type (1 for 45w HP, 2 for Dell 65w)"
-                if ($chargerTypeInput -eq "BACK") { return }
-                
-                try {
-                    $chargerType = [int]$chargerTypeInput
-                    if ($chargerType -ne 1 -and $chargerType -ne 2) {
-                        Write-Host "Invalid selection. Please enter 1 or 2." -ForegroundColor Yellow
-                    }
-                }
-                catch {
-                    Write-Host "Invalid input. Please enter a number (1 or 2)." -ForegroundColor Yellow
-                }
-            }
-            
-            # Create the charger asset
-            $chargerAsset = New-ChargerAsset -AssetTag $chargerTag -ChargerType $chargerType
-            
-            if (-not $chargerAsset) {
-                Write-Host "Failed to create charger. Operation cancelled for this checkout." -ForegroundColor Red
-                Start-Sleep -Seconds 2
-                continue
-            }
-        }
-        
-        try {
-            # Checkout laptop to user
-            Set-SnipeitAssetOwner -id $laptopAsset.id -assigned_id $user.id -checkout_to_type "user"
-            Write-Host "Successfully checked out laptop $laptopTag to $($user.name)" -ForegroundColor Green
-            
-            # Checkout charger to user
-            Set-SnipeitAssetOwner -id $chargerAsset.id -assigned_id $user.id -checkout_to_type "user" 
-            Write-Host "Successfully checked out charger $chargerTag to $($user.name)" -ForegroundColor Green
-            
-            Write-Host "`nCheckout complete. Starting next checkout..." -ForegroundColor Cyan
-            Write-Host "Type 'quit' or 'exit' at any prompt to finish." -ForegroundColor Yellow
-        }
-        catch {
-            Write-Host "Error checking out laptop/charger: $($_.Exception.Message)" -ForegroundColor Red
-        }
-        
-        Start-Sleep -Seconds 1
-    }
-}
-
-function CheckoutLaptopCharger {
-    Clear-Host
-    Write-Host "=======================================" -ForegroundColor Cyan
-    Write-Host "     LAPTOP & CHARGER CHECK-OUT        " -ForegroundColor Cyan
-    Write-Host "=======================================" -ForegroundColor Cyan
-    
-    # Ask if this is normal or summer checkout
-    $mode = ""
-    while ($mode -ne "normal" -and $mode -ne "summer") {
-        $mode = Get-UserInputWithOptions -Prompt "Enter checkout mode (normal or summer)"
-        if ($mode -eq "BACK") { return }
-        $mode = $mode.ToLower()
-        
-        if ($mode -ne "normal" -and $mode -ne "summer") {
-            Write-Host "Invalid mode. Please enter 'normal' or 'summer'." -ForegroundColor Yellow
-        }
-    }
-    
-    if ($mode -eq "normal") {
-        # Normal checkout process
-        PerformNormalCheckout
-    } else {
-        # Summer checkout process
-        PerformSummerCheckout
-    }
 }
 
 # Process Standard Checkout/Checkin Menu
@@ -988,6 +749,7 @@ function Show-AssetStatusSummary
 }
 
 # Helper function for user input with options
+# Note: Kept this helper function as it's used by other functions in the script
 function Get-UserInputWithOptions {
     param(
         [string]$Prompt,
@@ -1200,28 +962,123 @@ function Start-MainApplication
     }
 }
 
+
+
 # Main script execution starts here
 Write-Host "===========================================" -ForegroundColor Blue
 Write-Host "         SNIPE-IT MANAGEMENT SYSTEM       " -ForegroundColor Blue
 Write-Host "===========================================" -ForegroundColor Blue
 
-# Initialize the Snipe-IT connection and modules
-Write-Host "Initializing Snipe-IT system..." -ForegroundColor Yellow
-$initResult = Initialize-SnipeITCredentials
+# Clear any existing connection first to prevent credential conflicts
+if (Get-Variable -Name SnipeItPS_Endpoint -Scope Global -ErrorAction SilentlyContinue) {
+    Remove-Variable -Name SnipeItPS_Endpoint -Scope Global -Force
+}
+if (Get-Variable -Name SnipeItPS_ApiKey -Scope Global -ErrorAction SilentlyContinue) {
+    Remove-Variable -Name SnipeItPS_ApiKey -Scope Global -Force
+}
 
-if ($initResult)
-{
-    Write-Host "`nInitialization successful! Starting main application..." -ForegroundColor Green
+# Ask user about credential method
+$credentialChoice = Read-Host "Use saved credentials? (y/n)"
+$useSaved = $credentialChoice.ToLower() -eq 'y'
+
+# If user wants to create new saved credentials
+if ($useSaved) {
+    $createNew = Read-Host "Create new saved credentials? (y/n)"
+    if ($createNew.ToLower() -eq 'y') {
+        # Create and save new credentials
+        Write-Host "Enter Snipe-IT URL as username and API key as password"
+        $SnipeCred = Get-Credential -Message "Use URL as username and API key as password"
+        $credPath = Read-Host "Enter path to save credentials (default: .\snipecred.xml)"
+        if ([string]::IsNullOrEmpty($credPath)) {
+            $credPath = ".\snipecred.xml"
+        }
+        $SnipeCred | Export-CliXml $credPath
+        Write-Host "Credentials saved to $credPath" -ForegroundColor Green
+    }
+}
+
+# Initialize the Snipe-IT connection
+Write-Host "Initializing Snipe-IT system..." -ForegroundColor Yellow
+$apiUrl, $apiKey, $siteCred = Initialize-SnipeITCredentials -UseSavedCredentials:$useSaved
+
+try {
+    # Establish connection to Snipe-IT
+    if ($siteCred) {
+        # Connect using saved credentials - try with certificate handling first
+        Write-Host "Connecting to Snipe-IT using saved credentials..." -ForegroundColor Yellow
+        
+        # Try different parameter versions based on what's available
+        try {
+            # Try with IgnoreCertificateErrors parameter
+            Connect-SnipeitPS -siteCred $siteCred -IgnoreCertificateErrors
+        }
+        catch {
+            # If that fails, try without the parameter
+            try {
+                Connect-SnipeitPS -siteCred $siteCred
+            }
+            catch {
+                # Try with different SSL parameter names that might be in different versions
+                try {
+                    Connect-SnipeitPS -siteCred $siteCred -SkipCertificateCheck
+                }
+                catch {
+                    # Last resort, report error
+                    throw $_.Exception
+                }
+            }
+        }
+    } 
+    else {
+        # Connect using direct URL and API key - same approach with certificate handling
+        Write-Host "Connecting to Snipe-IT at $apiUrl..." -ForegroundColor Yellow
+        
+        try {
+            Connect-SnipeitPS -url $apiUrl -apiKey $apiKey -IgnoreCertificateErrors
+        }
+        catch {
+            try {
+                Connect-SnipeitPS -url $apiUrl -apiKey $apiKey
+            }
+            catch {
+                try {
+                    Connect-SnipeitPS -url $apiUrl -apiKey $apiKey -SkipCertificateCheck
+                }
+                catch {
+                    throw $_.Exception
+                }
+            }
+        }
+    }
+    
+    Write-Host "`nConnection successful! Starting main application..." -ForegroundColor Green
     Start-Sleep -Seconds 2
     
     # Start the main application
     Start-MainApplication
-} else
-{
-    Write-Host "`nInitialization failed. Please check the errors above and try again." -ForegroundColor Red
-    Write-Host "Make sure the modules directory exists with the required .psm1 files." -ForegroundColor Yellow
 }
-
-Write-Host "`nThank you for using Snipe-IT Management System!" -ForegroundColor Green
-Write-Host "Press any key to exit..." -ForegroundColor Gray
-[void][System.Console]::ReadKey($true)
+catch {
+    Write-Host "`nConnection failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Error details: $($_.Exception.StackTrace)" -ForegroundColor Yellow
+    
+    # Provide troubleshooting suggestions based on the error
+    if ($_.Exception.Message -like "*parameter name*") {
+        Write-Host "`nTroubleshooting: You appear to be using a different version of the SnipeITPS module." -ForegroundColor Cyan
+        Write-Host "Try checking which parameters are supported by running:" -ForegroundColor Cyan
+        Write-Host "Get-Command Connect-SnipeitPS -Syntax" -ForegroundColor White
+        
+        # Try to get the module version
+        try {
+            $moduleInfo = Get-Module SnipeitPS -ListAvailable
+            Write-Host "Your SnipeITPS module version: $($moduleInfo.Version)" -ForegroundColor Cyan
+        }
+        catch {
+            Write-Host "Could not determine SnipeITPS module version." -ForegroundColor Yellow
+        }
+    }
+    elseif ($_.Exception.Message -like "*certificate*" -or $_.Exception.Message -like "*SSL*") {
+        Write-Host "`nTroubleshooting: This appears to be a certificate validation issue." -ForegroundColor Cyan
+        Write-Host "If you're using a self-signed certificate, try updating to the latest SnipeITPS module:" -ForegroundColor Cyan
+        Write-Host "Install-Module -Name SnipeitPS -Force" -ForegroundColor White
+    }
+}

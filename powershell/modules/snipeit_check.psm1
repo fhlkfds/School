@@ -425,6 +425,16 @@ function PerformNormalCheckout {
 }
 
 function PerformSummerCheckout {
+    # Create a CSV file path in a consistent location
+    $date = Get-Date -Format "yyyy-MM-dd"
+    $csvPath = "/home/liam/School/powershell/snipeit_checkout.csv"
+    
+    # Create the CSV file if it doesn't exist
+    if (-not (Test-Path $csvPath)) {
+        "UserID,UserName,LaptopTag,ChargerTag,Timestamp" | Out-File -FilePath $csvPath
+        Write-Host "Created backup CSV log at $csvPath" -ForegroundColor Cyan
+    }
+    
     # Loop until user types quit/exit (handled by Get-UserInputWithOptions)
     while ($true) {
         Write-Host "`n--- NEW CHECKOUT ---" -ForegroundColor Cyan
@@ -446,50 +456,58 @@ function PerformSummerCheckout {
         $laptopTag = Get-UserInputWithOptions -Prompt "Enter laptop asset tag"
         if ($laptopTag -eq "BACK") { return }
         
-        $laptopAsset = Get-AssetByTag -AssetTag $laptopTag
-        if (-not $laptopAsset) {
-            Write-Host "Operation cancelled for this checkout." -ForegroundColor Red
-            Start-Sleep -Seconds 2
-            continue
-        }
-        
         # Get charger asset tag
         $chargerTag = Get-UserInputWithOptions -Prompt "Enter charger asset tag"
         if ($chargerTag -eq "BACK") { return }
         
-        $chargerAsset = Get-AssetByTag -AssetTag $chargerTag
+        # Always log to CSV regardless of Snipe-IT status
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        "$($user.id),$($user.name),$laptopTag,$chargerTag,$timestamp" | Out-File -FilePath $csvPath -Append
+        Write-Host "Checkout data saved to CSV backup." -ForegroundColor Green
         
-        # If charger doesn't exist, create it
-        if (-not $chargerAsset) {
-            Write-Host "Charger with tag $chargerTag not found. Creating new charger asset..." -ForegroundColor Yellow
-            
-            $chargerType = 0
-            while ($chargerType -ne 1 -and $chargerType -ne 2) {
-                $chargerTypeInput = Get-UserInputWithOptions -Prompt "Select charger type (1 for 45w HP, 2 for Dell 65w)"
-                if ($chargerTypeInput -eq "BACK") { return }
-                
-                try {
-                    $chargerType = [int]$chargerTypeInput
-                    if ($chargerType -ne 1 -and $chargerType -ne 2) {
-                        Write-Host "Invalid selection. Please enter 1 or 2." -ForegroundColor Yellow
-                    }
-                }
-                catch {
-                    Write-Host "Invalid input. Please enter a number (1 or 2)." -ForegroundColor Yellow
-                }
-            }
-            
-            # Create the charger asset
-            $chargerAsset = New-ChargerAsset -AssetTag $chargerTag -ChargerType $chargerType
-            
-            if (-not $chargerAsset) {
-                Write-Host "Failed to create charger. Operation cancelled for this checkout." -ForegroundColor Red
+        # Now try to process in Snipe-IT if it's available
+        try {
+            # Get laptop asset from Snipe-IT
+            $laptopAsset = Get-AssetByTag -AssetTag $laptopTag
+            if (-not $laptopAsset) {
+                Write-Host "Laptop not found in Snipe-IT. CSV record has been kept." -ForegroundColor Yellow
                 Start-Sleep -Seconds 2
                 continue
             }
-        }
-        
-        try {
+            
+            # Get charger asset from Snipe-IT
+            $chargerAsset = Get-AssetByTag -AssetTag $chargerTag
+            
+            # If charger doesn't exist, create it
+            if (-not $chargerAsset) {
+                Write-Host "Charger with tag $chargerTag not found. Creating new charger asset..." -ForegroundColor Yellow
+                
+                $chargerType = 0
+                while ($chargerType -ne 1 -and $chargerType -ne 2) {
+                    $chargerTypeInput = Get-UserInputWithOptions -Prompt "Select charger type (1 for 45w HP, 2 for Dell 65w)"
+                    if ($chargerTypeInput -eq "BACK") { return }
+                    
+                    try {
+                        $chargerType = [int]$chargerTypeInput
+                        if ($chargerType -ne 1 -and $chargerType -ne 2) {
+                            Write-Host "Invalid selection. Please enter 1 or 2." -ForegroundColor Yellow
+                        }
+                    }
+                    catch {
+                        Write-Host "Invalid input. Please enter a number (1 or 2)." -ForegroundColor Yellow
+                    }
+                }
+                
+                # Create the charger asset
+                $chargerAsset = New-ChargerAsset -AssetTag $chargerTag -ChargerType $chargerType
+                
+                if (-not $chargerAsset) {
+                    Write-Host "Failed to create charger in Snipe-IT. CSV record has been kept." -ForegroundColor Yellow
+                    Start-Sleep -Seconds 2
+                    continue
+                }
+            }
+            
             # Checkout laptop to user
             Set-SnipeitAssetOwner -id $laptopAsset.id -assigned_id $user.id -checkout_to_type "user"
             Write-Host "Successfully checked out laptop $laptopTag to $($user.name)" -ForegroundColor Green
@@ -502,13 +520,13 @@ function PerformSummerCheckout {
             Write-Host "Type 'quit' or 'exit' at any prompt to finish." -ForegroundColor Yellow
         }
         catch {
-            Write-Host "Error checking out laptop/charger: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Error interacting with Snipe-IT: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "However, checkout record has been saved to CSV backup file." -ForegroundColor Green
         }
         
         Start-Sleep -Seconds 1
     }
 }
-
 
 
 function CheckinLaptopCharger {
