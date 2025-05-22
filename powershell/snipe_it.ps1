@@ -1,70 +1,44 @@
-# Function to handle secure credentials storage and retrieval
-function Initialize-SnipeITCredentials
-{
-    # Define the path for storing encrypted credentials
-    $credentialPath = Join-Path $PSScriptRoot "secure\snipeit_credentials.xml"
-    $credentialDir = Split-Path $credentialPath -Parent
-
-    # Create the secure directory if it doesn't exist
-    if (-not (Test-Path $credentialDir))
-    {
-        try
-        {
-            New-Item -Path $credentialDir -ItemType Directory -Force | Out-Null
-            Write-Host "Created secure directory for credentials." -ForegroundColor Green
-        } catch
-        {
-            Write-Host "Error creating secure directory: $($_.Exception.Message)" -ForegroundColor Red
-            return $null, $null
-        }
-    }
-
-    # Check if credentials file exists
-    if (Test-Path $credentialPath)
-    {
-        try
-        {
-            # Import existing credentials
-            $credentialObject = Import-Clixml -Path $credentialPath
-            $apiUrl = $credentialObject.ApiUrl
-            $apiKeySecure = $credentialObject.ApiKey | ConvertTo-SecureString
-            $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKeySecure))
-            
-            Write-Host "Loaded existing Snipe-IT credentials." -ForegroundColor Green
-            return $apiUrl, $apiKey
-        } catch
-        {
-            Write-Host "Error loading credentials: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "Will prompt for new credentials." -ForegroundColor Yellow
-        }
-    }
-
-    # If we get here, we need to prompt for credentials
-    Write-Host "No saved Snipe-IT credentials found. Please enter your API details:" -ForegroundColor Yellow
-    $apiUrl = Read-Host "Enter Snipe-IT URL (e.g., https://inventory.company.com)"
-    $apiKeySecure = Read-Host "Enter your Snipe-IT API Key" -AsSecureString
-    
-    # Convert SecureString to plain text for immediate use
-    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($apiKeySecure)
-    $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-    
-    # Save the credentials
-    try
-    {
-        $credentialObject = New-Object PSObject -Property @{
-            ApiUrl = $apiUrl
-            ApiKey = $apiKeySecure | ConvertFrom-SecureString
-        }
+function Initialize-SnipeITCredentials {
+    param(
+        [Parameter(Mandatory = $false)]
+        [switch]$UseSavedCredentials,
         
-        $credentialObject | Export-Clixml -Path $credentialPath
-        Write-Host "Credentials saved securely." -ForegroundColor Green
-    } catch
-    {
-        Write-Host "Failed to save credentials: $($_.Exception.Message)" -ForegroundColor Red
+        [Parameter(Mandatory = $false)]
+        [string]$CredentialPath = ".\snipecred.xml"
+    )
+    
+    if ($UseSavedCredentials -and (Test-Path $CredentialPath)) {
+        # Use saved credentials from XML file
+        Write-Host "Using saved credentials from $CredentialPath" -ForegroundColor Green
+        $siteCred = Import-CliXml $CredentialPath
+        return $null, $null, $siteCred
+    } 
+    else {
+        # Use hardcoded credentials as fallback
+        $global:SnipeItApiUrl = "https://inv.nomma.lan"  # Replace with your actual Snipe-IT URL
+        $global:SnipeItApiKey = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJh..."  # Your API key here
+        $global:SnipeItCredentialPath = $null
+        
+        Write-Host "Using hardcoded Snipe-IT credentials." -ForegroundColor Yellow
+        
+        return $global:SnipeItApiUrl, $global:SnipeItApiKey, $null
     }
+}
 
-    return $apiUrl, $apiKey
+function New-SnipeITCredential {
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$Path = ".\snipecred.xml"
+    )
+    
+    Write-Host "Creating new Snipe-IT credentials..." -ForegroundColor Yellow
+    Write-Host "Enter Snipe-IT URL as username and API key as password" -ForegroundColor Cyan
+    
+    $credential = Get-Credential -Message "Use URL as username and API key as password"
+    $credential | Export-CliXml $Path
+    
+    Write-Host "Credentials saved to $Path" -ForegroundColor Green
+    return $Path
 }
 
 # Function to initialize the comprehensive reporting module
@@ -95,6 +69,105 @@ function Initialize-ComprehensiveReporting
     return $false
 }
 
+
+
+
+# Import required modules from the local modules directory
+$modulesPath = Join-Path $PSScriptRoot "modules"
+$checkModule = Join-Path $modulesPath "snipeit_check.psm1"
+$tempBrokenModule = Join-Path $modulesPath "snipeit_temp_broken.psm1"
+Write-Host "Loading modules from: $modulesPath" -ForegroundColor Yellow
+
+# Import the check-in/check-out module
+if (Test-Path $checkModule) {
+    Import-Module $checkModule -Force
+    Write-Host "Successfully imported snipeit_check module." -ForegroundColor Green
+    
+    # Verify functions are available
+    if (Get-Command -Name "CheckoutLaptopCharger" -ErrorAction SilentlyContinue) {
+        Write-Host "Check-in/Check-out functions successfully loaded." -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: Module imported but functions not available!" -ForegroundColor Red
+    }
+} else {
+    Write-Host "ERROR: Could not find snipeit_check.psm1 at $checkModule" -ForegroundColor Red
+}
+
+# Import the temp/broken devices module
+if (Test-Path $tempBrokenModule) {
+    Import-Module $tempBrokenModule -Force
+    Write-Host "Successfully imported snipeit_temp_broken module." -ForegroundColor Green
+} else {
+    Write-Host "WARNING: Could not find snipeit_temp_broken.psm1 at $tempBrokenModule" -ForegroundColor Yellow
+}
+
+# Function to get user ID from various input types
+function Get-UserId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$UserInput
+    )
+    
+    Write-Host "Looking up user: $UserInput..." -ForegroundColor Yellow
+    
+    try {
+        # First try exact username match
+        $user = Get-SnipeitUser -username $UserInput
+        if ($user) {
+            return $user
+        }
+        
+        # Try by employee number
+        $user = Get-SnipeitUser -employee_num $UserInput
+        if ($user) {
+            return $user
+        }
+        
+        # Try by user ID if it's a number
+        if ($UserInput -match '^\d+$') {
+            $user = Get-SnipeitUser -id $UserInput
+            if ($user) {
+                return $user
+            }
+        }
+        
+        # Try partial name search as last resort
+        $allUsers = Get-SnipeitUser -all
+        $matchedUsers = $allUsers | Where-Object { 
+            $_.username -like "*$UserInput*" -or 
+            $_.name -like "*$UserInput*" -or 
+            $_.email -like "*$UserInput*"
+        }
+        
+        if ($matchedUsers -and $matchedUsers.Count -gt 0) {
+            # If multiple matches, let user select
+            if ($matchedUsers.Count -gt 1) {
+                Write-Host "Multiple users found. Please select one:" -ForegroundColor Yellow
+                for ($i = 0; $i -lt $matchedUsers.Count; $i++) {
+                    Write-Host "$($i+1). $($matchedUsers[$i].name) ($($matchedUsers[$i].username))" -ForegroundColor Cyan
+                }
+                
+                $selection = Read-Host "Enter selection number"
+                if ($selection -match '^\d+$' -and [int]$selection -ge 1 -and [int]$selection -le $matchedUsers.Count) {
+                    return $matchedUsers[[int]$selection - 1]
+                } else {
+                    Write-Host "Invalid selection." -ForegroundColor Red
+                    return $null
+                }
+            } else {
+                # Single match found
+                return $matchedUsers[0]
+            }
+        }
+        
+        # No user found
+        Write-Host "No user found matching '$UserInput'." -ForegroundColor Red
+        return $null
+    } catch {
+        Write-Host "Error looking up user: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
 
 # Main Menu Display Function
 function Show-MainMenu
@@ -675,6 +748,40 @@ function Show-AssetStatusSummary
     Show-ReportsMenu
 }
 
+# Helper function for user input with options
+# Note: Kept this helper function as it's used by other functions in the script
+function Get-UserInputWithOptions {
+    param(
+        [string]$Prompt,
+        [switch]$AllowBack = $true,
+        [switch]$AllowQuit = $true
+    )
+    
+    $options = @()
+    if ($AllowBack) { $options += "'back' to return to main menu" }
+    if ($AllowQuit) { $options += "'quit' to exit" }
+    
+    if ($options.Count -gt 0) {
+        $optionText = " (or " + ($options -join ", ") + ")"
+        $fullPrompt = $Prompt + $optionText + ": "
+    } else {
+        $fullPrompt = $Prompt + ": "
+    }
+    
+    $input = Read-Host $fullPrompt
+    
+    if ($AllowQuit -and ($input.ToLower() -eq "quit" -or $input.ToLower() -eq "exit")) {
+        Write-Host "Exiting application..." -ForegroundColor Yellow
+        exit
+    }
+    
+    if ($AllowBack -and $input.ToLower() -eq "back") {
+        return "BACK"
+    }
+    
+    return $input
+}
+
 # Today's Checkouts
 function Show-TodaysCheckouts
 {
@@ -855,28 +962,123 @@ function Start-MainApplication
     }
 }
 
+
+
 # Main script execution starts here
 Write-Host "===========================================" -ForegroundColor Blue
 Write-Host "         SNIPE-IT MANAGEMENT SYSTEM       " -ForegroundColor Blue
 Write-Host "===========================================" -ForegroundColor Blue
 
-# Initialize the Snipe-IT connection and modules
-Write-Host "Initializing Snipe-IT system..." -ForegroundColor Yellow
-$initResult = Initialize-SnipeITCredentials
+# Clear any existing connection first to prevent credential conflicts
+if (Get-Variable -Name SnipeItPS_Endpoint -Scope Global -ErrorAction SilentlyContinue) {
+    Remove-Variable -Name SnipeItPS_Endpoint -Scope Global -Force
+}
+if (Get-Variable -Name SnipeItPS_ApiKey -Scope Global -ErrorAction SilentlyContinue) {
+    Remove-Variable -Name SnipeItPS_ApiKey -Scope Global -Force
+}
 
-if ($initResult)
-{
-    Write-Host "`nInitialization successful! Starting main application..." -ForegroundColor Green
+# Ask user about credential method
+$credentialChoice = Read-Host "Use saved credentials? (y/n)"
+$useSaved = $credentialChoice.ToLower() -eq 'y'
+
+# If user wants to create new saved credentials
+if ($useSaved) {
+    $createNew = Read-Host "Create new saved credentials? (y/n)"
+    if ($createNew.ToLower() -eq 'y') {
+        # Create and save new credentials
+        Write-Host "Enter Snipe-IT URL as username and API key as password"
+        $SnipeCred = Get-Credential -Message "Use URL as username and API key as password"
+        $credPath = Read-Host "Enter path to save credentials (default: .\snipecred.xml)"
+        if ([string]::IsNullOrEmpty($credPath)) {
+            $credPath = ".\snipecred.xml"
+        }
+        $SnipeCred | Export-CliXml $credPath
+        Write-Host "Credentials saved to $credPath" -ForegroundColor Green
+    }
+}
+
+# Initialize the Snipe-IT connection
+Write-Host "Initializing Snipe-IT system..." -ForegroundColor Yellow
+$apiUrl, $apiKey, $siteCred = Initialize-SnipeITCredentials -UseSavedCredentials:$useSaved
+
+try {
+    # Establish connection to Snipe-IT
+    if ($siteCred) {
+        # Connect using saved credentials - try with certificate handling first
+        Write-Host "Connecting to Snipe-IT using saved credentials..." -ForegroundColor Yellow
+        
+        # Try different parameter versions based on what's available
+        try {
+            # Try with IgnoreCertificateErrors parameter
+            Connect-SnipeitPS -siteCred $siteCred -IgnoreCertificateErrors
+        }
+        catch {
+            # If that fails, try without the parameter
+            try {
+                Connect-SnipeitPS -siteCred $siteCred
+            }
+            catch {
+                # Try with different SSL parameter names that might be in different versions
+                try {
+                    Connect-SnipeitPS -siteCred $siteCred -SkipCertificateCheck
+                }
+                catch {
+                    # Last resort, report error
+                    throw $_.Exception
+                }
+            }
+        }
+    } 
+    else {
+        # Connect using direct URL and API key - same approach with certificate handling
+        Write-Host "Connecting to Snipe-IT at $apiUrl..." -ForegroundColor Yellow
+        
+        try {
+            Connect-SnipeitPS -url $apiUrl -apiKey $apiKey -IgnoreCertificateErrors
+        }
+        catch {
+            try {
+                Connect-SnipeitPS -url $apiUrl -apiKey $apiKey
+            }
+            catch {
+                try {
+                    Connect-SnipeitPS -url $apiUrl -apiKey $apiKey -SkipCertificateCheck
+                }
+                catch {
+                    throw $_.Exception
+                }
+            }
+        }
+    }
+    
+    Write-Host "`nConnection successful! Starting main application..." -ForegroundColor Green
     Start-Sleep -Seconds 2
     
     # Start the main application
     Start-MainApplication
-} else
-{
-    Write-Host "`nInitialization failed. Please check the errors above and try again." -ForegroundColor Red
-    Write-Host "Make sure the modules directory exists with the required .psm1 files." -ForegroundColor Yellow
 }
-
-Write-Host "`nThank you for using Snipe-IT Management System!" -ForegroundColor Green
-Write-Host "Press any key to exit..." -ForegroundColor Gray
-[void][System.Console]::ReadKey($true)
+catch {
+    Write-Host "`nConnection failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Error details: $($_.Exception.StackTrace)" -ForegroundColor Yellow
+    
+    # Provide troubleshooting suggestions based on the error
+    if ($_.Exception.Message -like "*parameter name*") {
+        Write-Host "`nTroubleshooting: You appear to be using a different version of the SnipeITPS module." -ForegroundColor Cyan
+        Write-Host "Try checking which parameters are supported by running:" -ForegroundColor Cyan
+        Write-Host "Get-Command Connect-SnipeitPS -Syntax" -ForegroundColor White
+        
+        # Try to get the module version
+        try {
+            $moduleInfo = Get-Module SnipeitPS -ListAvailable
+            Write-Host "Your SnipeITPS module version: $($moduleInfo.Version)" -ForegroundColor Cyan
+        }
+        catch {
+            Write-Host "Could not determine SnipeITPS module version." -ForegroundColor Yellow
+        }
+    }
+    elseif ($_.Exception.Message -like "*certificate*" -or $_.Exception.Message -like "*SSL*") {
+        Write-Host "`nTroubleshooting: This appears to be a certificate validation issue." -ForegroundColor Cyan
+        Write-Host "If you're using a self-signed certificate, try updating to the latest SnipeITPS module:" -ForegroundColor Cyan
+        Write-Host "Install-Module -Name SnipeitPS -Force" -ForegroundColor White
+    }
+}
