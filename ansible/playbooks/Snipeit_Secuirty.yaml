@@ -1,0 +1,765 @@
+---
+- name: Copy SSH Public Key to Remote User
+  hosts: snipeit_servers
+  gather_facts: false
+  become: true
+
+  vars:
+    ssh_user: liam
+    local_pub_key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_rsa.pub') }}"
+
+  tasks:
+    - name: Create user if it doesn't exist
+      user:
+        name: "{{ ssh_user }}"
+        shell: /bin/bash
+        create_home: yes
+        state: present
+
+    - name: Ensure .ssh directory exists
+      file:
+        path: "/home/{{ ssh_user }}/.ssh"
+        state: directory
+        mode: '0700'
+        owner: "{{ ssh_user }}"
+        group: "{{ ssh_user }}"
+
+    - name: Copy public key to authorized_keys
+      authorized_key:
+        user: "{{ ssh_user }}"
+        key: "{{ local_pub_key }}"
+        state: present
+
+- name: Secure Snipe-IT server on Debian 12
+  hosts: snipeit_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    ssh_user: liam  # Added this line to fix the undefined variable error
+    allowed_ips:
+      - "192.168.1.0/24"
+      - "192.168.122.0/24"
+    admin_email: "admin@example.com"
+
+  tasks:
+    # System Updates and Package Management
+    - name: Update and upgrade apt packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install security and monitoring packages
+      apt:
+        name:
+          - ufw
+          - fail2ban
+          - apache2
+          - unattended-upgrades
+          - apt-listchanges
+          - lynis
+          - auditd
+          - audispd-plugins
+          - rkhunter
+          - aide
+          - aide-common
+          - apparmor
+          - apparmor-utils
+          - apparmor-profiles
+          - logwatch
+          - logrotate
+          - chkrootkit
+          - debsums
+          - acct
+        state: present
+
+    # Automatic Security Updates
+    - name: Configure unattended upgrades
+      copy:
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        content: |
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}";
+              "${distro_id}:${distro_codename}-security";
+              "${distro_id}ESMApps:${distro_codename}-apps-security";
+              "${distro_id}ESM:${distro_codename}-infra-security";
+          };
+          Unattended-Upgrade::Package-Blacklist {
+              // "vim";
+              // "libc6-dev";
+              "linux-image-*";
+          };
+          Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+          Unattended-Upgrade::MinimalSteps "true";
+          Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+          Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          Unattended-Upgrade::Automatic-Reboot "false";
+          Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+          Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+          Unattended-Upgrade::Mail "{{ admin_email }}";
+          Unattended-Upgrade::MailOnlyOnError "true";
+        mode: '0644'
+
+    - name: Enable automatic updates
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Download-Upgradeable-Packages "1";
+          APT::Periodic::AutocleanInterval "7";
+          APT::Periodic::Unattended-Upgrade "1";
+        mode: '0644'
+
+    # UFW Firewall Configuration
+    - name: Reset UFW to known state
+      ufw:
+        state: reset
+
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: 'incoming', policy: 'deny' }
+        - { direction: 'outgoing', policy: 'allow' }
+
+    - name: Allow SSH from trusted IPs
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+        src: "{{ item }}"
+      loop: "{{ allowed_ips }}"
+
+    - name: Allow HTTP from trusted IPs
+      ufw:
+        rule: allow
+        port: '80'
+        proto: tcp
+        src: "{{ item }}"
+      loop: "{{ allowed_ips }}"
+
+    - name: Enable UFW logging
+      ufw:
+        logging: 'on'
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    # Advanced SSH Hardening
+    - name: Backup original SSH config
+      copy:
+        src: /etc/ssh/sshd_config
+        dest: /etc/ssh/sshd_config.backup
+        remote_src: yes
+        force: no
+
+    - name: Configure advanced SSH hardening
+      blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          # Advanced SSH Hardening
+          Protocol 2
+          Port 22
+          PermitRootLogin no
+          PasswordAuthentication no
+          ChallengeResponseAuthentication no
+          PubkeyAuthentication yes
+          UsePAM yes
+          MaxAuthTries 3
+          MaxSessions 2
+          ClientAliveInterval 300
+          ClientAliveCountMax 2
+          LoginGraceTime 30
+          AllowUsers {{ ssh_user }}
+          DenyUsers root
+          PermitEmptyPasswords no
+          X11Forwarding no
+          AllowAgentForwarding no
+          AllowTcpForwarding no
+          PermitTunnel no
+          Banner /etc/ssh/banner
+          LogLevel INFO
+          Compression no
+          TCPKeepAlive no
+          UsePrivilegeSeparation yes
+          StrictModes yes
+          IgnoreRhosts yes
+          HostbasedAuthentication no
+          PermitUserEnvironment no
+        marker: "# {mark} ANSIBLE MANAGED SSH HARDENING"
+        backup: yes
+      notify: Restart SSH
+
+    - name: Create SSH warning banner
+      copy:
+        dest: /etc/ssh/banner
+        content: |
+          ****************************************************************
+          *                                                              *
+          *  This system is for authorized users only. Unauthorized     *
+          *  access is prohibited and will be prosecuted to the full    *
+          *  extent of the law. All activities are logged and monitored.*
+          *                                                              *
+          ****************************************************************
+        mode: '0644'
+
+    - name: Validate SSH configuration
+      command: sshd -t
+      changed_when: false
+
+    # Enhanced Fail2Ban Configuration
+    - name: Configure comprehensive fail2ban
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [DEFAULT]
+          # Ban IPs for 24 hours
+          bantime = 86400
+          # 10 minute window
+          findtime = 600
+          # 3 attempts before ban
+          maxretry = 3
+          # Notification email
+          destemail = {{ admin_email }}
+          sendername = Fail2Ban-{{ ansible_hostname }}
+          mta = sendmail
+          action = %(action_mwl)s
+
+          [sshd]
+          enabled = true
+          port = ssh
+          logpath = /var/log/auth.log
+          maxretry = 3
+          bantime = 86400
+
+          [apache-auth]
+          enabled = true
+          port = http,https
+          logpath = /var/log/apache2/error.log
+
+          [apache-badbots]
+          enabled = true
+          port = http,https
+          logpath = /var/log/apache2/access.log
+          bantime = 172800
+          maxretry = 1
+
+          [apache-noscript]
+          enabled = true
+          port = http,https
+          logpath = /var/log/apache2/access.log
+
+          [apache-overflows]
+          enabled = true
+          port = http,https
+          logpath = /var/log/apache2/error.log
+          maxretry = 2
+
+          [php-url-fopen]
+          enabled = true
+          port = http,https
+          logpath = /var/log/apache2/access.log
+
+          [recidive]
+          enabled = true
+          logpath = /var/log/fail2ban.log
+          action = %(action_mwl)s
+          bantime = 604800
+          findtime = 86400
+          maxretry = 5
+        mode: '0644'
+      notify: Restart fail2ban
+
+    - name: Ensure fail2ban is running and enabled
+      systemd:
+        name: fail2ban
+        state: started
+        enabled: true
+
+    # Audit System (auditd)
+    - name: Configure auditd rules
+      copy:
+        dest: /etc/audit/rules.d/audit.rules
+        content: |
+          # First rule - delete all
+          -D
+
+          # Increase the buffers to survive stress events
+          -b 8192
+
+          # Monitor for changes to passwd, group, and shadow files
+          -w /etc/passwd -p wa -k identity
+          -w /etc/group -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/gshadow -p wa -k identity
+
+          # Monitor sudo configuration
+          -w /etc/sudoers -p wa -k scope
+          -w /etc/sudoers.d/ -p wa -k scope
+
+          # Monitor login/logout events
+          -w /var/log/faillog -p wa -k logins
+          -w /var/log/lastlog -p wa -k logins
+          -w /var/log/tallylog -p wa -k logins
+
+          # Monitor network configuration
+          -w /etc/hosts -p wa -k system-locale
+          -w /etc/hostname -p wa -k system-locale
+          -w /etc/network/ -p wa -k system-locale
+
+          # Monitor system startup scripts
+          -w /etc/inittab -p wa -k init
+          -w /etc/init.d/ -p wa -k init
+          -w /etc/init/ -p wa -k init
+
+          # Monitor library searches
+          -w /etc/ld.so.conf -p wa -k libpath
+
+          # Monitor kernel module loading
+          -w /sbin/insmod -p x -k modules
+          -w /sbin/rmmod -p x -k modules
+          -w /sbin/modprobe -p x -k modules
+          -a always,exit -F arch=b64 -S init_module -S delete_module -k modules
+
+          # Monitor critical files
+          -w /etc/ssh/sshd_config -k sshd
+          -w /etc/apache2/ -p wa -k webserver
+
+          # Monitor file permission changes
+          -a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          -a always,exit -F arch=b64 -S chown -S fchown -S fchownat -S lchown -F auid>=1000 -F auid!=4294967295 -k perm_mod
+
+          # Make the configuration immutable
+          -e 2
+        mode: '0640'
+      notify: Restart auditd
+
+    - name: Ensure auditd is running and enabled
+      systemd:
+        name: auditd
+        state: started
+        enabled: true
+
+    # RKHunter for Rootkit Detection
+    # RKHunter for Rootkit Detection
+    - name: Check if RKHunter config exists and backup if needed
+      copy:
+        src: /etc/rkhunter.conf
+        dest: /etc/rkhunter.conf.backup
+        remote_src: yes
+        force: no
+
+    - name: Ensure RKHunter has proper default configuration
+      shell: |
+        if ! grep -q "INSTALLDIR=" /etc/rkhunter.conf; then
+          echo "INSTALLDIR=/usr" >> /etc/rkhunter.conf
+        fi
+        if ! grep -q "SCRIPTDIR=" /etc/rkhunter.conf; then
+          echo "SCRIPTDIR=/usr/share/rkhunter/scripts" >> /etc/rkhunter.conf
+        fi
+        if ! grep -q "BINDIR=" /etc/rkhunter.conf; then
+          echo "BINDIR=/usr/bin" >> /etc/rkhunter.conf
+        fi
+      args:
+        executable: /bin/bash
+
+    - name: Configure RKHunter with minimal safe settings
+      lineinfile:
+        path: /etc/rkhunter.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      loop:
+        - { regexp: '^UPDATE_MIRRORS=', line: 'UPDATE_MIRRORS=1' }
+        - { regexp: '^MIRRORS_MODE=', line: 'MIRRORS_MODE=0' }
+        - { regexp: '^MAIL-ON-WARNING=', line: 'MAIL-ON-WARNING="{{ admin_email }}"' }
+        - { regexp: '^ALLOW_SSH_ROOT_USER=', line: 'ALLOW_SSH_ROOT_USER=no' }
+        - { regexp: '^ALLOW_SSH_PROT_V1=', line: 'ALLOW_SSH_PROT_V1=0' }
+
+    - name: Add script whitelist to prevent false positives
+      lineinfile:
+        path: /etc/rkhunter.conf
+        line: "{{ item }}"
+        insertafter: EOF
+      loop:
+        - "SCRIPTWHITELIST=/usr/bin/egrep"
+        - "SCRIPTWHITELIST=/usr/bin/fgrep"
+        - "SCRIPTWHITELIST=/usr/bin/ldd"
+
+    - name: Validate RKHunter configuration
+      command: rkhunter --config-check
+      changed_when: false
+      failed_when: false
+      register: rkhunter_config_check
+
+    - name: Display RKHunter config check results
+      debug:
+        var: rkhunter_config_check.stdout_lines
+      when: rkhunter_config_check.stdout_lines is defined
+
+    - name: Create RKHunter file properties baseline (must be done first)
+      command: rkhunter --propupd
+      changed_when: false
+      failed_when: false
+
+    - name: Update RKHunter database
+      command: rkhunter --update
+      changed_when: false
+      failed_when: false
+
+    - name: Setup RKHunter daily scan
+      cron:
+        name: "RKHunter daily scan"
+        minute: "0"
+        hour: "3"
+        job: "/usr/bin/rkhunter --cronjob --update --quiet"
+        user: root
+
+    # AIDE for File Integrity Monitoring
+    - name: Initialize AIDE database
+      command: aideinit
+      args:
+        creates: /var/lib/aide/aide.db.new
+      register: aide_init
+
+    - name: Move AIDE database to production location
+      command: mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      when: aide_init.changed
+
+    - name: Setup AIDE daily check
+      cron:
+        name: "AIDE daily integrity check"
+        minute: "30"
+        hour: "2"
+        job: "/usr/bin/aide --check --config /etc/aide/aide.conf | mail -s 'AIDE Integrity Check - {{ ansible_hostname }}' {{ admin_email }}"
+        user: root
+
+    # AppArmor Configuration
+    - name: Enable AppArmor service
+      systemd:
+        name: apparmor
+        state: started
+        enabled: true
+
+    - name: Set AppArmor profiles to enforce mode
+      command: aa-enforce /etc/apparmor.d/*
+      register: apparmor_enforce
+      failed_when: false
+      changed_when: apparmor_enforce.rc == 0
+
+    - name: Check AppArmor status
+      command: aa-status
+      register: apparmor_status
+      changed_when: false
+
+    # File and Directory Permissions Hardening
+    - name: Set strict permissions on sensitive files
+      file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+        owner: "{{ item.owner | default('root') }}"
+        group: "{{ item.group | default('root') }}"
+      loop:
+        - { path: '/etc/passwd', mode: '0644' }
+        - { path: '/etc/shadow', mode: '0600' }
+        - { path: '/etc/group', mode: '0644' }
+        - { path: '/etc/gshadow', mode: '0600' }
+        - { path: '/etc/ssh/sshd_config', mode: '0600' }
+        - { path: '/var/log', mode: '0755' }
+        - { path: '/etc/sudoers', mode: '0440' }
+        - { path: '/boot', mode: '0755' }
+
+    - name: Remove world-writable permissions from system directories
+      command: find {{ item }} -type d -perm -002 -exec chmod o-w {} \;
+      loop:
+        - /etc
+        - /usr
+        - /var
+      changed_when: false
+
+    # Log Monitoring Setup
+    - name: Configure logwatch
+      copy:
+        dest: /etc/logwatch/conf/logwatch.conf
+        content: |
+          LogDir = /var/log
+          TmpDir = /var/cache/logwatch
+          MailTo = {{ admin_email }}
+          MailFrom = logwatch@{{ ansible_hostname }}
+          Print = No
+          Save = /tmp/logwatch
+          Range = yesterday
+          Detail = Med
+          Service = All
+          mailer = "mail -s"
+        mode: '0644'
+
+    - name: Setup logwatch daily report
+      cron:
+        name: "Logwatch daily report"
+        minute: "0"
+        hour: "6"
+        job: "/usr/sbin/logwatch --output mail --mailto {{ admin_email }} --detail high"
+        user: root
+
+    - name: Configure log rotation
+      copy:
+        dest: /etc/logrotate.d/security-logs
+        content: |
+          /var/log/auth.log {
+              daily
+              missingok
+              rotate 52
+              compress
+              delaycompress
+              notifempty
+              create 0640 root root
+              postrotate
+                  systemctl reload rsyslog
+              endscript
+          }
+
+          /var/log/fail2ban.log {
+              daily
+              missingok
+              rotate 30
+              compress
+              delaycompress
+              notifempty
+              create 0640 root root
+              postrotate
+                  systemctl reload fail2ban
+              endscript
+          }
+        mode: '0644'
+
+    # Security Auditing with Lynis
+    - name: Setup Lynis security audit
+      cron:
+        name: "Weekly Lynis security audit"
+        minute: "0"
+        hour: "4"
+        weekday: "0"
+        job: "/usr/bin/lynis audit system --quiet --no-colors --cronjob > /var/log/lynis-report.txt 2>&1 && mail -s 'Weekly Security Audit - {{ ansible_hostname }}' {{ admin_email }} < /var/log/lynis-report.txt"
+        user: root
+
+    # System Accounting
+    - name: Enable system accounting
+      systemd:
+        name: acct
+        state: started
+        enabled: true
+# Apache Configuration (fixed version)
+    - name: Check if autoindex module is enabled
+      command: apache2ctl -M
+      register: apache_modules
+      changed_when: false
+      failed_when: false
+
+    - name: Disable Apache autoindex module
+      command: a2dismod -f autoindex
+      when: "'autoindex_module' in apache_modules.stdout"
+      notify: Restart Apache
+
+    - name: Ensure Apache sites-available directory exists
+      file:
+        path: /etc/apache2/sites-available
+        state: directory
+        mode: '0755'
+
+    # Enable required Apache modules FIRST (before creating virtual host)
+    - name: Enable required Apache modules
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rewrite
+        - headers
+        - ssl
+      notify: Restart Apache
+
+    # Configure global Apache security settings
+    - name: Configure Apache global security settings
+      lineinfile:
+        path: /etc/apache2/apache2.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      loop:
+        - { regexp: '^ServerTokens', line: 'ServerTokens Prod' }
+        - { regexp: '^ServerSignature', line: 'ServerSignature Off' }
+      notify: Restart Apache
+
+    - name: Configure Snipe-IT Apache virtual host
+      copy:
+        dest: /etc/apache2/sites-available/snipeit.conf
+        content: |
+          <VirtualHost *:80>
+              ServerAdmin {{ admin_email }}
+              DocumentRoot /var/www/html/snipeit/public
+              ServerName {{ ansible_default_ipv4.address | default('localhost') }}
+
+              <Directory /var/www/html/snipeit/public>
+                  Options -Indexes +FollowSymLinks
+                  AllowOverride All
+                  Require all granted
+              </Directory>
+
+              <Directory /var/www/html/snipeit>
+                  Options -Indexes
+                  AllowOverride None
+                  Require all denied
+              </Directory>
+
+              # Security headers
+              Header always set X-Frame-Options "SAMEORIGIN"
+              Header always set X-Content-Type-Options "nosniff"
+              Header always set X-XSS-Protection "1; mode=block"
+              Header always set Strict-Transport-Security "max-age=31536000"
+              Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+              ErrorLog ${APACHE_LOG_DIR}/snipeit_error.log
+              CustomLog ${APACHE_LOG_DIR}/snipeit_access.log combined
+          </VirtualHost>
+        mode: '0644'
+      notify: Reload Apache
+
+    - name: Disable default Apache site
+      command: a2dissite 000-default
+      args:
+        removes: /etc/apache2/sites-enabled/000-default.conf
+      notify: Reload Apache
+
+    - name: Enable Snipe-IT site
+      command: a2ensite snipeit.conf
+      args:
+        creates: /etc/apache2/sites-enabled/snipeit.conf
+      notify: Reload Apache
+
+    - name: Disable default Apache site
+      command: a2dissite 000-default
+      args:
+        removes: /etc/apache2/sites-enabled/000-default.conf
+      notify: Reload Apache
+
+    - name: Enable Snipe-IT site
+      command: a2ensite snipeit.conf
+      args:
+        creates: /etc/apache2/sites-enabled/snipeit.conf
+      notify: Reload Apache
+
+    - name: Find PHP version
+      shell: php -v | head -n1 | grep -oP '\d+\.\d+' | head -1
+      register: php_version
+      changed_when: false
+
+    - name: Harden PHP configuration
+      lineinfile:
+        path: "/etc/php/{{ php_version.stdout }}/apache2/php.ini"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      loop:
+        - { regexp: '^expose_php\s*=', line: 'expose_php = Off' }
+        - { regexp: '^display_errors\s*=', line: 'display_errors = Off' }
+        - { regexp: '^display_startup_errors\s*=', line: 'display_startup_errors = Off' }
+        - { regexp: '^log_errors\s*=', line: 'log_errors = On' }
+        - { regexp: '^allow_url_fopen\s*=', line: 'allow_url_fopen = Off' }
+        - { regexp: '^allow_url_include\s*=', line: 'allow_url_include = Off' }
+        - { regexp: '^session.cookie_httponly\s*=', line: 'session.cookie_httponly = 1' }
+        - { regexp: '^session.cookie_secure\s*=', line: 'session.cookie_secure = 1' }
+      notify: Restart Apache
+
+    - name: Check if Snipe-IT .env file exists
+      stat:
+        path: /var/www/html/snipeit/.env
+      register: snipeit_env
+
+    - name: Configure Snipe-IT environment (if .env exists)
+      lineinfile:
+        path: /var/www/html/snipeit/.env
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      loop:
+        - { regexp: '^APP_DEBUG=', line: 'APP_DEBUG=false' }
+        - { regexp: '^APP_ENV=', line: 'APP_ENV=production' }
+      when: snipeit_env.stat.exists
+      notify: Restart Apache
+
+    - name: Set proper permissions on Snipe-IT directory (if exists)
+      file:
+        path: /var/www/html/snipeit
+        owner: www-data
+        group: www-data
+        mode: '0755'
+        recurse: yes
+      when: snipeit_env.stat.exists
+
+    # Final Security Summary Report
+    - name: Create security summary script
+      copy:
+        dest: /usr/local/bin/security-summary.sh
+        content: |
+          #!/bin/bash
+          echo "Security Status Report for {{ ansible_hostname }}"
+          echo "Generated on: $(date)"
+          echo "============================================"
+          echo
+          echo "UFW Status:"
+          ufw status verbose
+          echo
+          echo "Fail2Ban Status:"
+          fail2ban-client status
+          echo
+          echo "AppArmor Status:"
+          aa-status --complain 2>/dev/null || echo "AppArmor not fully configured"
+          echo
+          echo "Audit Status:"
+          systemctl is-active auditd
+          echo
+          echo "Last Lynis Scan:"
+          if [ -f /var/log/lynis-report.txt ]; then
+              tail -n 10 /var/log/lynis-report.txt
+          else
+              echo "No Lynis scan found"
+          fi
+        mode: '0755'
+
+    - name: Setup weekly security summary
+      cron:
+        name: "Weekly security summary"
+        minute: "0"
+        hour: "8"
+        weekday: "1"
+        job: "/usr/local/bin/security-summary.sh | mail -s 'Weekly Security Summary - {{ ansible_hostname }}' {{ admin_email }}"
+        user: root
+
+  handlers:
+    - name: Restart Apache
+      systemd:
+        name: apache2
+        state: restarted
+
+    - name: Reload Apache
+      systemd:
+        name: apache2
+        state: reloaded
+
+    - name: Restart SSH
+      systemd:
+        name: ssh
+        state: restarted
+
+    - name: Restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
+
+    - name: Restart auditd
+      command: service auditd restart
+      # Note: auditd requires special restart method
