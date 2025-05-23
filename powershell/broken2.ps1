@@ -15,9 +15,9 @@ $Config = @{
     CSVFilePath = "laptop_swaps.csv"
     
     # Email Configuration (Using App Password for Gmail)
-    EmailRecipient = ""
-    EmailSender = ""  # CHANGE THIS
-    EmailAppPassword = ""  # CHANGE THIS - Generate from Google Account settings
+    EmailRecipient = "ldecareaux@nomma.net"
+    EmailSender = "ldecareaux@nomma.net"  # CHANGE THIS
+    EmailAppPassword = "qtag kygr grqs aqkc"  # CHANGE THIS - Generate from Google Account settings
     SMTPServer = "smtp.gmail.com"
     SMTPPort = 587
     

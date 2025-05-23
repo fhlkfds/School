@@ -1,0 +1,70 @@
+[2025-05-23 08:28:01] [INFO] === Starting Laptop Exchange Process ===
+[2025-05-23 08:28:01] [INFO] Connecting to SnipeIT using stored credentials
+[2025-05-23 08:28:02] [SUCCESS] Successfully connected to SnipeIT
+[2025-05-23 08:28:02] [INFO] --- Validating Configuration ---
+[2025-05-23 08:28:02] [INFO] DamagedStatusId: 6
+[2025-05-23 08:28:02] [INFO] ReadyToDeployStatusId: 2
+[2025-05-23 08:28:02] [INFO] --- Checking Available Status Labels ---
+[2025-05-23 08:28:02] [INFO] Retrieving available status labels from SnipeIT
+[2025-05-23 08:28:02] [INFO] Available Status Labels:
+[2025-05-23 08:28:02] [INFO]   ID: 6 - Name: Damaged
+[2025-05-23 08:28:02] [INFO]   ID: 5 - Name: Deployed
+[2025-05-23 08:28:02] [INFO]   ID: 1 - Name: Pending
+[2025-05-23 08:28:02] [INFO]   ID: 2 - Name: Ready to Deploy
+[2025-05-23 08:28:02] [INFO]   ID: 3 - Name: Archived
+[2025-05-23 08:28:02] [INFO] Reading CSV data from: laptop_swaps.csv
+[2025-05-23 08:28:02] [SUCCESS] Successfully loaded 668 records from CSV
+[2025-05-23 08:28:02] [INFO] --- Processing Row 1 ---
+[2025-05-23 08:28:02] [INFO] Processing exchange for Student ID: 4016772
+[2025-05-23 08:28:02] [INFO] Broken laptop: 1902, New laptop: 2646
+[2025-05-23 08:28:02] [INFO] Validating student 4016772 with laptop 1902
+[2025-05-23 08:28:03] [SUCCESS] Validation successful: Asset 1902 is assigned to student 4016772
+[2025-05-23 08:28:03] [INFO] Processing maintenance for asset 1902 (Type: broken)
+[2025-05-23 08:28:03] [SUCCESS] Maintenance record created successfully for damaged asset 1902
+[2025-05-23 08:28:03] [INFO] Attempting to update asset 1902 to status ID 6 (Damaged)
+[2025-05-23 08:28:04] [SUCCESS] Asset 1902 status updated to 'Damaged' (ID: 6) successfully
+[2025-05-23 08:28:04] [INFO] Processing maintenance for asset 2646 (Type: replacement)
+[2025-05-23 08:28:04] [INFO] Attempting to update asset 2646 to status ID 2 (Ready for Assignment)
+[2025-05-23 08:28:04] [SUCCESS] Asset 2646 status updated to 'Ready for Assignment' (ID: 2) successfully
+[2025-05-23 08:28:04] [INFO] Updating notes for asset 1902
+[2025-05-23 08:28:04] [SUCCESS] Notes updated successfully for asset 1902
+[2025-05-23 08:28:05] [SUCCESS] Successfully unassigned broken laptop 1902
+[2025-05-23 08:28:05] [SUCCESS] Exchange completed successfully for student 4016772
+[2025-05-23 08:28:07] [SUCCESS] Email sent successfully: SUCCESS: Laptop Exchange Completed
+[2025-05-23 08:28:09] [INFO] --- Processing Row 2 ---
+[2025-05-23 08:28:09] [INFO] Processing exchange for Student ID: 5016191
+[2025-05-23 08:28:09] [INFO] Broken laptop: 2476, New laptop: 2473
+[2025-05-23 08:28:09] [INFO] Validating student 5016191 with laptop 2476
+[2025-05-23 08:28:09] [WARNING] Validation failed: Asset 2476 is assigned to 'Liam Decareaux', not student 5016191
+[2025-05-23 08:28:09] [ERROR] Validation failed for student 5016191 and broken laptop 2476
+[2025-05-23 08:28:10] [SUCCESS] Email sent successfully: ALERT: Laptop Assignment Conflict
+[2025-05-23 08:28:12] [INFO] --- Processing Row 3 ---
+[2025-05-23 08:28:12] [INFO] Processing exchange for Student ID: 5016207
+[2025-05-23 08:28:12] [INFO] Broken laptop: 1823, New laptop: 351
+[2025-05-23 08:28:12] [INFO] Validating student 5016207 with laptop 1823
+[2025-05-23 08:28:13] [SUCCESS] Validation successful: Asset 1823 is assigned to student 5016207
+[2025-05-23 08:28:13] [WARNING] New laptop 351 is already assigned to someone else
+[2025-05-23 08:28:15] [SUCCESS] Email sent successfully: ALERT: New Laptop Already Assigned
+[2025-05-23 08:28:17] [INFO] --- Processing Row 4 ---
+[2025-05-23 08:28:17] [INFO] Processing exchange for Student ID: 2017090
+[2025-05-23 08:28:17] [INFO] Broken laptop: 478, New laptop: 1915
+[2025-05-23 08:28:17] [INFO] Validating student 2017090 with laptop 478
+[2025-05-23 08:28:17] [SUCCESS] Validation successful: Asset 478 is assigned to student 2017090
+[2025-05-23 08:28:17] [INFO] Processing maintenance for asset 478 (Type: broken)
+[2025-05-23 08:28:18] [SUCCESS] Maintenance record created successfully for damaged asset 478
+[2025-05-23 08:28:18] [INFO] Attempting to update asset 478 to status ID 6 (Damaged)
+[2025-05-23 08:28:18] [SUCCESS] Asset 478 status updated to 'Damaged' (ID: 6) successfully
+[2025-05-23 08:28:18] [INFO] Processing maintenance for asset 1915 (Type: replacement)
+[2025-05-23 08:28:18] [INFO] Attempting to update asset 1915 to status ID 2 (Ready for Assignment)
+[2025-05-23 08:28:18] [SUCCESS] Asset 1915 status updated to 'Ready for Assignment' (ID: 2) successfully
+[2025-05-23 08:28:18] [INFO] Updating notes for asset 478
+[2025-05-23 08:28:20] [SUCCESS] Notes updated successfully for asset 478
+[2025-05-23 08:28:20] [SUCCESS] Successfully unassigned broken laptop 478
+[2025-05-23 08:28:20] [SUCCESS] Exchange completed successfully for student 2017090
+[2025-05-23 08:28:22] [SUCCESS] Email sent successfully: SUCCESS: Laptop Exchange Completed
+[2025-05-23 08:28:24] [INFO] --- Processing Row 5 ---
+[2025-05-23 08:28:24] [WARNING] Skipping row with missing required data
+[2025-05-23 08:28:26] [INFO] --- Processing Row 6 ---
+[2025-05-23 08:28:26] [WARNING] Skipping row with missing required data
+[2025-05-23 08:28:28] [INFO] --- Processing Row 7 ---
+[2025-05-23 08:28:28] [WARNING] Skipping row with missing required data

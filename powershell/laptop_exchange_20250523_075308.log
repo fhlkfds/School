@@ -1,0 +1,6 @@
+[2025-05-23 07:53:08] [INFO] === Starting Laptop Exchange Process ===
+[2025-05-23 07:53:08] [INFO] Connecting to SnipeIT using stored credentials
+[2025-05-23 07:53:08] [ERROR] Failed to connect to SnipeIT: Could not find file '/home/liam/School/powershell/snipecred.xml'.
+[2025-05-23 07:53:08] [ERROR] Make sure 'snipecred.xml' file exists in the current directory
+[2025-05-23 07:53:08] [ERROR] Failed to connect to SnipeIT. Please check your snipecred.xml file.
+[2025-05-23 07:53:08] [ERROR] Make sure the credential file exists and contains valid credentials.
