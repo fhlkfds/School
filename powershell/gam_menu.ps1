@@ -1049,12 +1049,15 @@ function Lock-SingleChromebook
 }
 
 # Function to lock multiple Chromebooks from CSV by asset ID
+
+# Function to lock multiple Chromebooks from CSV by serial number
 function Lock-MultipleChromebooks
 {
     Clear-Host
     Write-Host "Lock Multiple Chromebooks (CSV)" -ForegroundColor Cyan
     Write-Host "-----------------------------" -ForegroundColor Cyan
-    Write-Host "CSV format should be: asset_id" -ForegroundColor Yellow
+    Write-Host "CSV format should be: serial_number" -ForegroundColor Yellow
+    Write-Host "This will lock devices AND move them to Missing Chromebooks OU" -ForegroundColor Yellow
     $csvPath = Read-Host "Enter path to CSV file"
     
     if (-not (Test-Path $csvPath))
@@ -1070,28 +1073,49 @@ function Lock-MultipleChromebooks
     
     foreach ($device in $devices)
     {
-        if ([string]::IsNullOrEmpty($device.asset_id))
+        if ([string]::IsNullOrEmpty($device.serial_number))
         {
-            Write-Host "Skipping invalid entry: Missing asset_id" -ForegroundColor Yellow
+            Write-Host "Skipping invalid entry: Missing serial_number" -ForegroundColor Yellow
             $errorCount++
             continue
         }
         
         try
         {
-            Write-Host "Locking Chromebook with asset ID $($device.asset_id)..." -ForegroundColor Yellow
-            & gam update cros query "asset_id:$($device.asset_id)" action disable
-            Write-Host "Lock command sent successfully" -ForegroundColor Green
+            Write-Host "Locking Chromebook with serial number $($device.serial_number)..." -ForegroundColor Yellow
+            
+            # Attempt to lock the device
+            $lockResult = & gam update cros query "id:$($device.serial_number)" action disable 2>&1
+            
+            # Check if the lock command had issues
+            if ($lockResult -match "Illegal device state transition")
+            {
+                Write-Host "Device is already locked or in a protected state" -ForegroundColor Yellow
+            }
+            elseif ($lockResult -match "deprovisioned")
+            {
+                Write-Host "WARNING: Device is deprovisioned and needs re-enrollment" -ForegroundColor Red
+            }
+            else
+            {
+                Write-Host "Lock command sent successfully" -ForegroundColor Green
+            }
+            
+            # Move device to Missing Chromebooks OU (this usually works regardless of lock state)
+            Write-Host "Moving device to Missing Chromebooks OU..." -ForegroundColor Yellow
+            & gam update cros query "id:$($device.serial_number)" ou "/Cadets/Chromebooks/Missing Chromebooks"
+            Write-Host "Device moved to Missing Chromebooks OU" -ForegroundColor Green
+            
             $successCount++
         } catch
         {
-            Write-Host "Error locking device: $_" -ForegroundColor Red
+            Write-Host "Error processing device: $_" -ForegroundColor Red
             $errorCount++
         }
     }
     
-    Write-Host "`nChromebook locking complete!" -ForegroundColor Cyan
-    Write-Host "Successfully locked: $successCount" -ForegroundColor Green
+    Write-Host "`nChromebook locking and moving complete!" -ForegroundColor Cyan
+    Write-Host "Successfully processed: $successCount" -ForegroundColor Green
     Write-Host "Failed operations: $errorCount" -ForegroundColor $(if ($errorCount -gt 0)
         { "Red" 
         } else
@@ -1099,8 +1123,6 @@ function Lock-MultipleChromebooks
         })
     Read-Host "Press Enter to continue..."
 }
-
-
 
 # Function to wipe a device
 function Wipe-Device
