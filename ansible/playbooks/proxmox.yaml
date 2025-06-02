@@ -1,0 +1,455 @@
+---
+# Ansible playbook to secure a Proxmox VE server for a K-12 school environment
+# This playbook implements best practices for a lightly-managed server
+
+- name: Secure Proxmox VE Server for K-12 School
+  hosts: proxmox
+  become: yes
+  vars:
+    # CUSTOMIZE THESE VARIABLES
+    admin_user: liam  # Changed from schooladmin to liam
+    admin_ssh_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC9cPEPMG5cfkkAoG+994ni2GvnPmsDayeP9aHwx8RZuDQNBld6zN7hacaRGi0KNlO6QoB/JFZ7dHmGiUsLMGM7Kobp+zQqBGzp/AO5Ui5CTjFVdeJgHpOh6dThM2zqFB4oSL4uBMEiYxWW0DZJi9G58UeaZP+hF9eIdV7Iz5r+cPFef96VGqIIr6XMK2kceSZ0hUMbwTfwyqERfe6ZOS+bAgA+BT0bETLWseUXjkKJYxZIBsoBdX4GNzeORB4NTqinmbS4+wIheU/e5CkmP+CxDQowD4JnvSP8pgEiGUuFuzMQSdV7G9XCVvC4nhk4/d0QgpKyGEUZq9bn+1yR0w/TkXNTMAr4doYwgq/01t+KKAQk6XopE2nV+/8Wy1XoadNhQtgkQTVxZyqHrALtoDJGtrcp3ZpnAdM1SK1PfwO8tOcyZ5zfaWP0RUYubDjm3AyXzszPZgX5APbvYV++T/R+GaBTAkVWntKs7XBFDOAVclSPdukwE822s1TmugwDWI8= liam@4rt1x"
+    admin_password: "$6$bNyR.x9XXIxmSOCE$/16i4zInGKBiIgc7V/1D9ue5/XAfS5O53xRhNxaiH.2QL0s1sA1ohr06xYpfZIkG2iaL5OA7JP9LrG09zba/f0" # Generate with 'mkpasswd --method=SHA-512'
+    custom_ssh_port: 2222
+    admin_email: "ldecareaux@tutamail.com"
+
+  pre_tasks:
+    - name: Print password generation instructions
+      debug:
+        msg: |
+          IMPORTANT: Before running this playbook, you should generate a secure 
+          password hash for the admin_password variable.
+          
+          You can generate one using this command:
+          mkpasswd --method=SHA-512 --rounds=656000
+          
+          Then update the 'admin_password' variable in this playbook with the generated hash.
+
+    # Stop timedatectl for 10 seconds then re-enable
+    - name: Disable NTP synchronization
+      command: timedatectl set-ntp false
+
+    - name: Wait 10 seconds
+      pause:
+        seconds: 10
+
+    - name: Enable NTP synchronization
+      command: timedatectl set-ntp true
+
+    # Disable Proxmox Enterprise repositories
+    - name: Check if Proxmox VE Enterprise repository exists
+      stat:
+        path: /etc/apt/sources.list.d/pve-enterprise.list
+      register: pve_enterprise_repo
+
+    - name: Disable Proxmox VE Enterprise Repository
+      replace:
+        path: /etc/apt/sources.list.d/pve-enterprise.list
+        regexp: '^(deb.*pve-enterprise.*)'
+        replace: '# \1'
+      when: pve_enterprise_repo.stat.exists
+
+    - name: Check if Ceph Enterprise repository exists
+      stat:
+        path: /etc/apt/sources.list.d/ceph.list
+      register: ceph_enterprise_repo
+
+    - name: Disable Ceph Enterprise Repository
+      replace:
+        path: /etc/apt/sources.list.d/ceph.list
+        regexp: '^(deb.*enterprise.*)'
+        replace: '# \1'
+      when: ceph_enterprise_repo.stat.exists
+
+
+    # Update and upgrade system
+    - name: Update apt package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages to latest version
+      apt:
+        upgrade: full
+        autoremove: yes
+        autoclean: yes
+
+  tasks:
+    # Install essential security packages
+    - name: Install core security packages
+      apt:
+        name:
+          - sudo
+          - rsyslog
+          - openssh-server
+          - fail2ban
+          - rkhunter  # Rootkit checker
+          - apticron  # Notifies about package updates
+          - aide      # File integrity checker
+        state: present
+        update_cache: yes
+
+    # 1. SSH Hardening
+    - name: Completely disable root SSH login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin no'
+        state: present
+      notify: Restart SSH
+
+    - name: Disable root SSH via Match directive (redundant security)
+      blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          Match User root
+              PermitRootLogin no
+        state: present
+      notify: Restart SSH
+
+    - name: Update SSH configuration
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
+        - { regexp: '^#?Port', line: 'Port {{ custom_ssh_port }}' }
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+        - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 1m' }
+      notify: Restart SSH
+
+    - name: Create SSH banner file
+      copy:
+        dest: /etc/ssh/banner
+        content: |
+          ***************************************************************************
+          WARNING: Unauthorized access to this system is prohibited.
+          This system is for the use of authorized users only.
+          All activities on this system are logged and monitored.
+          Unauthorized access will be reported to law enforcement.
+          ***************************************************************************
+        mode: '0644'
+
+    - name: Enable SSH banner
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?Banner'
+        line: 'Banner /etc/ssh/banner'
+        state: present
+      notify: Restart SSH
+# Add these tasks after the "User and sudo configuration" section
+
+
+# Add these tasks after the "User and sudo configuration" section
+
+    # 3. Proxmox PAM user and Administrator privileges
+    - name: Set password for admin user (required for PAM authentication)
+      user:
+        name: "{{ admin_user }}"
+        password: "{{ 'Password@1' | password_hash('sha512') }}"
+        update_password: always
+      
+    - name: Add admin user to Proxmox PAM authentication (without setting password)
+      command: >
+        pveum user add {{ admin_user }}@pam
+        --comment "Administrator user for K-12 school Proxmox server"
+      register: pam_user_result
+      failed_when: 
+        - pam_user_result.rc != 0
+        - "'already exists' not in pam_user_result.stderr"
+      changed_when: pam_user_result.rc == 0
+
+    - name: Grant Administrator role to admin user in Proxmox
+      command: >
+        pveum acl modify / 
+        --users {{ admin_user }}@pam 
+        --roles Administrator
+      register: admin_role_result
+      failed_when: admin_role_result.rc != 0
+      changed_when: admin_role_result.rc == 0
+
+    - name: Verify admin user has Administrator privileges
+      command: pveum user list
+      register: user_list
+      changed_when: false
+
+    - name: Display Proxmox user configuration
+      debug:
+        msg: |
+          Proxmox PAM user '{{ admin_user }}@pam' has been configured.
+          You can now log into the Proxmox web interface at https://your-server-ip:8006
+          Username: {{ admin_user }}@pam
+          The user has been granted Administrator role with full privileges.
+
+
+      
+    # 2. User and sudo configuration
+    - name: Create admin user with password
+      user:
+        name: "{{ admin_user }}"
+        password: "{{ admin_password }}"
+        shell: /bin/bash
+        groups: sudo
+        append: yes
+        state: present
+
+    - name: Set authorized key for admin user
+      authorized_key:
+        user: "{{ admin_user }}"
+        state: present
+        key: "{{ admin_ssh_key }}"
+
+    - name: Allow passwordless sudo for admin user
+      lineinfile:
+        path: /etc/sudoers.d/{{ admin_user }}
+        line: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL"
+        state: present
+        mode: 0440
+        create: yes
+        validate: 'visudo -cf %s'
+
+
+    # 4. Fail2ban setup
+    - name: Configure Fail2ban
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [DEFAULT]
+          bantime = 1h
+          findtime = 10m
+          maxretry = 5
+          destemail = {{ admin_email }}
+          sender = root@{{ ansible_hostname }}
+          action = %(action_mwl)s
+
+          [sshd]
+          enabled = true
+          port = {{ custom_ssh_port }}
+          filter = sshd
+          logpath = /var/log/auth.log
+
+          [proxmox]
+          enabled = true
+          port = 8006
+          filter = proxmox
+          logpath = /var/log/daemon.log
+          maxretry = 3
+        mode: '0644'
+      notify: Restart Fail2ban
+
+    - name: Create Proxmox filter for Fail2ban
+      copy:
+        dest: /etc/fail2ban/filter.d/proxmox.conf
+        content: |
+          [Definition]
+          failregex = pvedaemon\[.*authentication failure; rhost=<HOST> user=.* msg=.*
+          ignoreregex =
+        mode: '0644'
+      notify: Restart Fail2ban
+
+    # 5. APT hardening
+    - name: Install unattended-upgrades and apt-listchanges
+      apt:
+        name: 
+          - unattended-upgrades
+          - apt-listchanges
+        state: present
+
+    - name: Configure unattended-upgrades
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+          APT::Periodic::Download-Upgradeable-Packages "1";
+        mode: '0644'
+
+    - name: Configure unattended-upgrades security
+      copy:
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        content: |
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}";
+              "${distro_id}:${distro_codename}-security";
+              "${distro_id}ESMApps:${distro_codename}-apps-security";
+              "${distro_id}ESM:${distro_codename}-infra-security";
+              "Proxmox:${distro_codename}";
+          };
+          Unattended-Upgrade::Mail "{{ admin_email }}";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          Unattended-Upgrade::Automatic-Reboot "false";
+        mode: '0644'
+
+    - name: Remove unnecessary packages
+      apt:
+        name:
+          - games
+          - games-finest
+          - games-entertainment
+        state: absent
+        purge: yes
+      ignore_errors: yes
+
+    # 6. System auditing and logging
+    - name: Install auditd
+      apt:
+        name: auditd
+        state: present
+
+    - name: Configure auditd
+      copy:
+        dest: /etc/audit/rules.d/audit.rules
+        content: |
+          # Delete all existing rules
+          -D
+
+          # Set buffer size to reduce likelihood of lost events
+          -b 8192
+
+          # Monitor user/group changes
+          -w /etc/passwd -p wa -k identity
+          -w /etc/group -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/sudoers -p wa -k identity
+          -w /etc/sudoers.d/ -p wa -k identity
+
+          # Monitor network configuration changes
+          -w /etc/hosts -p wa -k network_changes
+          -w /etc/network/ -p wa -k network_changes
+          -w /etc/sysconfig/network -p wa -k network_changes
+
+          # Monitor system time changes
+          -a always,exit -F arch=b64 -S adjtimex -S settimeofday -S clock_settime -k time-change
+          -a always,exit -F arch=b32 -S adjtimex -S settimeofday -S clock_settime -k time-change
+
+          # Monitor sensitive file access
+          -w /var/log/auth.log -p wa -k auth_log
+          -w /var/log/syslog -p wa -k syslog
+          -w /var/log/pve -p wa -k pve_log
+
+          # Monitor unauthorized access attempts
+          -a always,exit -F arch=b64 -S creat -S open -S openat -S open_by_handle_at -S truncate -S ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access
+          -a always,exit -F arch=b32 -S creat -S open -S openat -S open_by_handle_at -S truncate -S ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access
+          -a always,exit -F arch=b64 -S creat -S open -S openat -S open_by_handle_at -S truncate -S ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=4294967295 -k access
+          -a always,exit -F arch=b32 -S creat -S open -S openat -S open_by_handle_at -S truncate -S ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=4294967295 -k access
+        mode: '0640'
+      notify: Restart auditd
+
+    - name: Ensure rsyslog is installed and enabled
+      service:
+        name: rsyslog
+        state: started
+        enabled: yes
+
+    - name: Configure log rotation
+      copy:
+        dest: /etc/logrotate.d/rsyslog
+        content: |
+          /var/log/syslog
+          /var/log/auth.log
+          /var/log/mail.log
+          /var/log/kern.log
+          /var/log/daemon.log
+          /var/log/user.log
+          /var/log/lpr.log
+          /var/log/cron.log
+          /var/log/debug
+          /var/log/messages
+          /var/log/pve/*.log
+          {
+              rotate 4
+              weekly
+              missingok
+              notifempty
+              compress
+              delaycompress
+              sharedscripts
+              postrotate
+                  reload rsyslog >/dev/null 2>&1 || true
+              endscript
+          }
+        mode: '0644'
+
+    # 7. Proxmox-specific security
+    - name: Disable Proxmox subscription nag
+      copy:
+        dest: /etc/apt/apt.conf.d/no-subscription-warning
+        content: |
+          DPkg::Post-Invoke { "if [ -d /usr/share/javascript/proxmox-widget-toolkit ]; then sed -i 's/data.status !== \"Active\"/false/g' /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js; fi"; };
+        mode: '0644'
+    - name: Configure AIDE configuration file
+      copy:
+        dest: /etc/aide/aide.conf
+        content: |
+          # AIDE configuration for Proxmox security monitoring
+          database=file:/var/lib/aide/aide.db
+          database_out=file:/var/lib/aide/aide.db.new
+          gzip_dbout=yes
+          
+          # Define what to monitor
+          /bin p+i+n+u+g+s+b+m+c+md5+sha1
+          /sbin p+i+n+u+g+s+b+m+c+md5+sha1
+          /usr/bin p+i+n+u+g+s+b+m+c+md5+sha1
+          /usr/sbin p+i+n+u+g+s+b+m+c+md5+sha1
+          /lib p+i+n+u+g+s+b+m+c+md5+sha1
+          /usr/lib p+i+n+u+g+s+b+m+c+md5+sha1
+          /etc p+i+n+u+g+s+b+m+c+md5+sha1
+          /boot p+i+n+u+g+s+b+m+c+md5+sha1
+          /root p+i+n+u+g+s+b+m+c+md5+sha1
+          
+          # Exclude frequently changing directories
+          !/var/log/.*
+          !/var/cache/.*
+          !/var/tmp/.*
+          !/tmp/.*
+          !/proc/.*
+          !/sys/.*
+          !/dev/.*
+          !/run/.*
+        mode: '0644'
+
+    - name: Configure AIDE
+      command: aide --config=/etc/aide/aide.conf --init
+      args:
+        creates: /var/lib/aide/aide.db.new
+      register: aide_init
+      failed_when: aide_init.rc != 0 and aide_init.rc != 1
+
+    - name: Move initial AIDE database to active
+      command: mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      args:
+        creates: /var/lib/aide/aide.db
+      when: aide_init.changed
+
+    - name: Set up AIDE cron job
+      cron:
+        name: AIDE integrity check
+        hour: 3
+        minute: 0
+        job: "/usr/bin/aide --config=/etc/aide/aide.conf --check | mail -s 'AIDE integrity check on {{ ansible_hostname }}' {{ admin_email }}"
+
+  handlers:
+    - name: Restart SSH
+      service:
+        name: sshd
+        state: restarted
+
+    - name: Restart Fail2ban
+      service:
+        name: fail2ban
+        state: restarted
+
+    - name: Restart auditd
+      service:
+        name: auditd
+        state: restarted
+
+    - name: Restart pveproxy
+      service:
+        name: pveproxy
+        state: restarted
