@@ -195,6 +195,8 @@ function Move-UsersToGradeOU
         })
     Read-Host "Press Enter to continue..."
 }
+
+
 # Function to unlock a single Chromebook by asset ID with loop option and automatic OU placement based on model
 function Unlock-SingleChromebook
 {
@@ -253,6 +255,222 @@ function Unlock-SingleChromebook
         Read-Host "Press Enter to continue..."
     }
 }
+
+# Helper function to process individual Chromebook unlock and automatic OU placement
+function Process-ChromebookUnlock
+{
+    param (
+        [string]$AssetID
+    )
+    
+    Write-Host "`nProcessing Chromebook with asset ID: $AssetID" -ForegroundColor Cyan
+    
+    # Step 1: Get device information to determine model
+    Write-Host "Step 1: Getting device information..." -ForegroundColor Yellow
+    
+    try
+    {
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        & gam info cros query "asset_id:$AssetID" > $tempFile 2>&1
+        $deviceInfo = Get-Content $tempFile -Raw
+        Remove-Item $tempFile -Force
+        
+        # Check if device exists
+        if ($deviceInfo -match "Does not exist" -or $deviceInfo -match "No ChromeOS Devices")
+        {
+            Write-Host "✗ Device not found with asset ID: $AssetID" -ForegroundColor Red
+            return
+        }
+        
+        Write-Host "✓ Device information retrieved" -ForegroundColor Green
+    }
+    catch
+    {
+        Write-Host "✗ Error retrieving device information: $_" -ForegroundColor Red
+        return
+    }
+    
+    # Step 2: Parse model information
+    Write-Host "Step 2: Identifying device model..." -ForegroundColor Yellow
+    
+    $deviceModel = ""
+    $targetOU = ""
+    
+    # Extract model information from device info
+    if ($deviceInfo -match "model:\s*(.+)")
+    {
+        $deviceModel = $Matches[1].Trim()
+        Write-Host "Device Model: $deviceModel" -ForegroundColor Cyan
+    }
+    else
+    {
+        Write-Host "⚠ Could not determine device model from GAM output" -ForegroundColor Yellow
+        Write-Host "Raw device info:" -ForegroundColor Gray
+        Write-Host $deviceInfo -ForegroundColor Gray
+    }
+    
+    # Map device model to appropriate OU
+    $targetOU = Get-ChromebookOU -Model $deviceModel
+    
+    if ($targetOU -eq "")
+    {
+        Write-Host "⚠ Unknown device model: $deviceModel" -ForegroundColor Yellow
+        Write-Host "Available models:" -ForegroundColor Yellow
+        Write-Host "  - Dell 3100s" -ForegroundColor White
+        Write-Host "  - Dell 3110" -ForegroundColor White
+        Write-Host "  - Dell 3380s" -ForegroundColor White
+        Write-Host "  - Dell 3400s" -ForegroundColor White
+        Write-Host "  - Dell CB 3110 2025" -ForegroundColor White
+        Write-Host "  - Dell Lat 3445 CB" -ForegroundColor White
+        Write-Host "  - G6" -ForegroundColor White
+        Write-Host "  - HP CB 14 G7 (2022 set)" -ForegroundColor White
+        Write-Host "  - HP CB 14 G7 (2023 set)" -ForegroundColor White
+        
+        Write-Host "`nWould you like to manually assign an OU? (y/n): " -ForegroundColor Yellow -NoNewline
+        $manualChoice = Read-Host
+        
+        if ($manualChoice -eq "y")
+        {
+            $targetOU = Get-ManualOUSelection
+        }
+        else
+        {
+            Write-Host "Skipping OU placement for unknown model." -ForegroundColor Yellow
+        }
+    }
+    else
+    {
+        Write-Host "✓ Model identified - will place in: $targetOU" -ForegroundColor Green
+    }
+    
+    # Step 3: Unlock the device
+    Write-Host "Step 3: Unlocking Chromebook..." -ForegroundColor Yellow
+    
+    try
+    {
+        & gam update cros query "asset_id:$AssetID" action reenable
+        Write-Host "✓ Unlock command sent successfully" -ForegroundColor Green
+    }
+    catch
+    {
+        Write-Host "✗ Error unlocking device: $_" -ForegroundColor Red
+        return
+    }
+    
+    # Step 4: Move to appropriate OU if determined
+    if ($targetOU -ne "")
+    {
+        Write-Host "Step 4: Moving to appropriate OU..." -ForegroundColor Yellow
+        Write-Host "Target OU: $targetOU" -ForegroundColor Cyan
+        
+        try
+        {
+            & gam update cros query "asset_id:$AssetID" ou "$targetOU"
+            Write-Host "✓ Successfully moved to $targetOU" -ForegroundColor Green
+        }
+        catch
+        {
+            Write-Host "✗ Error moving device to OU: $_" -ForegroundColor Red
+        }
+    }
+    else
+    {
+        Write-Host "Step 4: Skipping OU placement" -ForegroundColor Yellow
+    }
+    
+    Write-Host "`n✓ Processing complete for asset ID: $AssetID" -ForegroundColor Green
+}
+
+# Function to map Chromebook model to appropriate OU
+function Get-ChromebookOU
+{
+    param (
+        [string]$Model
+    )
+    
+    # Convert to lowercase for easier matching
+    $modelLower = $Model.ToLower()
+    
+    # Map models to OUs based on the provided list
+    switch -Regex ($modelLower)
+    {
+        "3100" { 
+            return "/Cadets/Chromebooks/Dell 3100s"
+        }
+        "3110.*2025|cb.*3110.*2025" { 
+            return "/Cadets/Chromebooks/Dell CB 3110 2025"
+        }
+        "3110" { 
+            return "/Cadets/Chromebooks/Dell 3110"
+        }
+        "3380" { 
+            return "/Cadets/Chromebooks/Dell 3380s"
+        }
+        "3400" { 
+            return "/Cadets/Chromebooks/Dell 3400s"
+        }
+        "3445|lat.*3445" { 
+            return "/Cadets/Chromebooks/Dell Lat 3445 CB"
+        }
+        "hp.*14.*g6|cb.*14.*g6|chromebook.*14.*g6" { 
+            return "/Cadets/Chromebooks/G6"
+        }
+        "hp.*14.*g7.*2023|cb.*14.*g7.*2023" { 
+            return "/Cadets/Chromebooks/2023"
+        }
+        "hp.*14.*g7.*2022|cb.*14.*g7.*2022" { 
+            return "/Cadets/Chromebooks/HP CB 14 G7 (2022 set)"
+        }
+        "hp.*14.*g7|cb.*14.*g7" { 
+            # Default G7 to 2022 set if year not specified
+            return "/Cadets/Chromebooks/HP CB 14 G7 (2022 set)"
+        }
+        default { 
+            return ""
+        }
+    }
+}
+
+# Function for manual OU selection when model is unknown
+function Get-ManualOUSelection
+{
+    Write-Host "`nSelect destination OU:" -ForegroundColor Yellow
+    Write-Host "1. Dell 3100s" -ForegroundColor White
+    Write-Host "2. Dell 3110" -ForegroundColor White
+    Write-Host "3. Dell 3380s" -ForegroundColor White
+    Write-Host "4. Dell 3400s" -ForegroundColor White
+    Write-Host "5. Dell CB 3110 2025" -ForegroundColor White
+    Write-Host "6. Dell Lat 3445 CB" -ForegroundColor White
+    Write-Host "7. G6" -ForegroundColor White
+    Write-Host "8. HP CB 14 G7 (2022 set)" -ForegroundColor White
+    Write-Host "9. HP CB 14 G7 (2023 set)" -ForegroundColor White
+    Write-Host "10. Skip OU placement" -ForegroundColor White
+    Write-Host "Enter choice [1-10]: " -ForegroundColor Yellow -NoNewline
+    
+    $ouChoice = Read-Host
+    
+    # Map choice to OU path
+    switch ($ouChoice)
+    {
+        "1" { return "/Cadets/Chromebooks/Dell 3100s" }
+        "2" { return "/Cadets/Chromebooks/Dell 3110" }
+        "3" { return "/Cadets/Chromebooks/Dell 3380s" }
+        "4" { return "/Cadets/Chromebooks/Dell 3400s" }
+        "5" { return "/Cadets/Chromebooks/Dell CB 3110 2025" }
+        "6" { return "/Cadets/Chromebooks/Dell Lat 3445 CB" }
+        "7" { return "/Cadets/Chromebooks/G6" }
+        "8" { return "/Cadets/Chromebooks/HP CB 14 G7 (2022 set)" }
+        "9" { return "/Cadets/Chromebooks/2023" }
+        "10" { return "" }
+        default { 
+            Write-Host "Invalid choice. Skipping OU placement." -ForegroundColor Yellow
+            return ""
+        }
+    }
+}
+
+
+
 
 # Helper function to process individual Chromebook unlock and automatic OU placement
 function Process-ChromebookUnlock
